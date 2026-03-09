@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Models\Concerns\BelongsToTenant;
+use App\Services\CacheService;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -34,6 +35,9 @@ class User extends Authenticatable
     protected $casts = [
         'email_verified_at' => 'datetime',
         'password' => 'hashed',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+        'deleted_at' => 'datetime',
     ];
 
     protected function name(): Attribute
@@ -71,5 +75,52 @@ class User extends Authenticatable
     public function invitations(): HasMany
     {
         return $this->hasMany(Invitation::class);
+    }
+
+    public function getCachedDivisions()
+    {
+        $key = CacheService::key('user:divisions', $this->id);
+
+        return CacheService::remember($key, CacheService::TTL_MEDIUM, function () {
+            return $this->divisions()
+                ->get()
+                ->map(function ($division) {
+                    return [
+                        'id' => $division->id,
+                        'name' => $division->name,
+                        'slug' => $division->slug,
+                        'role' => $division->pivot->role,
+                    ];
+                });
+        });
+    }
+
+    public function getCachedProjectCount(): int
+    {
+        $key = CacheService::key('user:project_count', $this->id);
+
+        return CacheService::remember($key, CacheService::TTL_SHORT, function () {
+            return $this->projects()->count();
+        });
+    }
+
+    public function getCachedFeedbackCount(): int
+    {
+        $key = CacheService::key('user:feedback_count', $this->id);
+
+        return CacheService::remember($key, CacheService::TTL_SHORT, function () {
+            return $this->feedbacks()->count();
+        });
+    }
+
+    protected static function booted(): void
+    {
+        static::updated(function (User $user) {
+            CacheService::clearUserCache();
+        });
+
+        static::deleted(function (User $user) {
+            CacheService::clearUserCache();
+        });
     }
 }

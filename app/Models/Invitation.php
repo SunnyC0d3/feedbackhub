@@ -27,7 +27,10 @@ class Invitation extends Model
 
     protected $casts = [
         'expires_at' => 'datetime',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
     ];
+
 
     public function tenant(): BelongsTo
     {

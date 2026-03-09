@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Models\Concerns\BelongsToTenant;
+use App\Services\CacheService;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -22,6 +23,12 @@ class Project extends Model
         'name',
         'slug',
         'description'
+    ];
+
+    protected $casts = [
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+        'deleted_at' => 'datetime',
     ];
 
     protected function name(): Attribute
@@ -60,5 +67,62 @@ class Project extends Model
     public function feedbacks(): HasMany
     {
         return $this->hasMany(Feedback::class);
+    }
+
+    public function getCachedFeedbackCount(): int
+    {
+        $key = CacheService::key('project:feedback_count', $this->id);
+
+        return CacheService::remember($key, CacheService::TTL_SHORT, function () {
+            return $this->feedbacks()->count();
+        });
+    }
+
+    public function getCachedFeedbackByStatus(string $status)
+    {
+        $key = CacheService::key('project:feedback_status', $this->id, $status);
+
+        return CacheService::remember($key, CacheService::TTL_SHORT, function () use ($status) {
+            return $this->feedbacks()
+                ->where('status', $status)
+                ->get();
+        });
+    }
+
+    public function getCachedAssignedUsers()
+    {
+        $key = CacheService::key('project:users', $this->id);
+
+        return CacheService::remember($key, CacheService::TTL_MEDIUM, function () {
+            return $this->users()
+                ->get()
+                ->map(function ($user) {
+                    return [
+                        'id' => $user->id,
+                        'name' => $user->name,
+                        'email' => $user->email,
+                        'assigned_by' => $user->pivot->assigned_by_user_id,
+                    ];
+                });
+        });
+    }
+
+    protected static function booted(): void
+    {
+        static::updated(function (Project $project) {
+            $patterns = [
+                "project:feedback_count:{$project->id}",
+                "project:feedback_status:{$project->id}:*",
+                "project:users:{$project->id}",
+            ];
+
+            foreach ($patterns as $pattern) {
+                CacheService::forget($pattern);
+            }
+        });
+
+        static::deleted(function (Project $project) {
+            CacheService::forget("project:*:{$project->id}:*");
+        });
     }
 }

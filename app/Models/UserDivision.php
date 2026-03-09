@@ -15,6 +15,11 @@ class UserDivision extends Pivot
         'role',
     ];
 
+    protected $casts = [
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+    ];
+
     public function division(): BelongsTo
     {
         return $this->belongsTo(Division::class);

@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Models\Concerns\BelongsToTenant;
+use App\Services\CacheService;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -20,6 +21,12 @@ class Division extends Model
         'tenant_id',
         'name',
         'slug',
+    ];
+
+    protected $casts = [
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+        'deleted_at' => 'datetime',
     ];
 
     protected function name(): Attribute
@@ -58,5 +65,52 @@ class Division extends Model
     public function projects(): HasMany
     {
         return $this->hasMany(Project::class);
+    }
+
+    public function getCachedProjects()
+    {
+        $key = CacheService::key('division:projects', $this->id);
+
+        return CacheService::remember($key, CacheService::TTL_MEDIUM, function () {
+            return $this->projects()->get();
+        });
+    }
+
+    public function getCachedUserCount(): int
+    {
+        $key = CacheService::key('division:user_count', $this->id);
+
+        return CacheService::remember($key, CacheService::TTL_SHORT, function () {
+            return $this->users()->count();
+        });
+    }
+
+    public function getCachedUsers()
+    {
+        $key = CacheService::key('division:users', $this->id);
+
+        return CacheService::remember($key, CacheService::TTL_MEDIUM, function () {
+            return $this->users()
+                ->get()
+                ->map(function ($user) {
+                    return [
+                        'id' => $user->id,
+                        'name' => $user->name,
+                        'email' => $user->email,
+                        'role' => $user->pivot->role,
+                    ];
+                });
+        });
+    }
+
+    protected static function booted(): void
+    {
+        static::updated(function (Division $division) {
+            CacheService::forget("division:*:{$division->id}:*");
+        });
+
+        static::deleted(function (Division $division) {
+            CacheService::forget("division:*:{$division->id}:*");
+        });
     }
 }

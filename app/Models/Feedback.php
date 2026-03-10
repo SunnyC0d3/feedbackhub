@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Jobs\SendIdempotentFeedbackNotification;
 use App\Models\Concerns\BelongsToTenant;
 use App\Services\LogService;
+use App\Services\MetricsService;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -74,6 +75,8 @@ class Feedback extends Model
                 'job' => 'SendIdempotentNotification',
                 'event' => 'job_dispatched',
             ]);
+
+            MetricsService::clearMetricsCache($feedback->tenant_id);
         });
 
         static::updated(function (Feedback $feedback) {
@@ -86,6 +89,8 @@ class Feedback extends Model
                     'event' => 'feedback_status_changed',
                 ]);
             }
+
+            MetricsService::clearMetricsCache($feedback->tenant_id);
         });
 
         static::deleted(function (Feedback $feedback) {
@@ -94,6 +99,8 @@ class Feedback extends Model
                 'deleted_by' => auth()->id(),
                 'event' => 'feedback_deleted',
             ]);
+
+            MetricsService::clearMetricsCache($feedback->tenant_id);
         });
     }
 }

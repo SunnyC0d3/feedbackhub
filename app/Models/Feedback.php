@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Jobs\SendIdempotentFeedbackNotification;
+use App\Jobs\StoreFeedbackEmbedding;
 use App\Models\Concerns\BelongsToTenant;
 use App\Services\LogService;
 use App\Services\MetricsService;
@@ -77,6 +78,13 @@ class Feedback extends Model
             ]);
 
             MetricsService::clearMetricsCache($feedback->tenant_id);
+
+            StoreFeedbackEmbedding::dispatch($feedback->id);
+
+            LogService::info('Feedback embedding job dispatched', [
+                'feedback_id' => $feedback->id,
+                'event' => 'embedding_job_dispatched',
+            ]);
         });
 
         static::updated(function (Feedback $feedback) {

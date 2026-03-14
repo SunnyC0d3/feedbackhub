@@ -30,6 +30,16 @@ class CacheService
         return Cache::remember($key, $ttl, $callback);
     }
 
+    public static function get(string $key, $default = null)
+    {
+        return Cache::get($key, $default);
+    }
+
+    public static function put(string $key, $value, int $ttl): bool
+    {
+        return Cache::put($key, $value, $ttl);
+    }
+
     public static function forget(string $pattern): void
     {
         $keys = self::getKeysByPattern($pattern);

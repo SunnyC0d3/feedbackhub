@@ -3,6 +3,7 @@
 namespace Database\Seeders;
 
 use App\Models\Project;
+use App\Models\Tenant;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
@@ -11,29 +12,36 @@ class UserProjectSeeder extends Seeder
 {
     public function run(): void
     {
-        $carol = User::where('email', 'carol@compass.com')->first();
-        $bob = User::where('email', 'bob@compass.com')->first();
+        $count = 0;
 
-        $mobileApp = Project::where('slug', 'compass-group-efoods-mobile-app')->first();
-        $websiteRedesign = Project::where('slug', 'compass-group-efoods-website-redesign')->first();
+        Tenant::all()->each(function (Tenant $tenant) use (&$count) {
+            $users = User::where('tenant_id', $tenant->id)->get();
+            $projects = Project::where('tenant_id', $tenant->id)->get();
+            $assigner = $users->first();
 
-        DB::table('user_projects')->insert([
-            [
-                'user_id' => $carol->id,
-                'project_id' => $mobileApp->id,
-                'assigned_by_user_id' => $bob->id,
-                'created_at' => now(),
-                'updated_at' => now(),
-            ],
-            [
-                'user_id' => $carol->id,
-                'project_id' => $websiteRedesign->id,
-                'assigned_by_user_id' => $bob->id,
-                'created_at' => now(),
-                'updated_at' => now(),
-            ],
-        ]);
+            $users->skip(1)->each(function (User $user) use ($projects, $assigner, &$count) {
+                $assigned = $projects->random(min(2, $projects->count()));
 
-        $this->command->info('✅ Created user-project assignments');
+                collect($assigned)->each(function (Project $project) use ($user, $assigner, &$count) {
+                    $exists = DB::table('user_projects')
+                        ->where('user_id', $user->id)
+                        ->where('project_id', $project->id)
+                        ->exists();
+
+                    if (!$exists) {
+                        DB::table('user_projects')->insert([
+                            'user_id' => $user->id,
+                            'project_id' => $project->id,
+                            'assigned_by_user_id' => $assigner->id,
+                            'created_at' => now(),
+                            'updated_at' => now(),
+                        ]);
+                        $count++;
+                    }
+                });
+            });
+        });
+
+        $this->command->info('✅ Created ' . $count . ' user-project assignments');
     }
 }

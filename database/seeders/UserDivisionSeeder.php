@@ -3,6 +3,7 @@
 namespace Database\Seeders;
 
 use App\Models\Division;
+use App\Models\Tenant;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
@@ -11,44 +12,48 @@ class UserDivisionSeeder extends Seeder
 {
     public function run(): void
     {
-        $alice = User::where('email', 'alice@compass.com')->first();
-        $bob = User::where('email', 'bob@compass.com')->first();
-        $carol = User::where('email', 'carol@compass.com')->first();
-        $david = User::where('email', 'david@acme.com')->first();
-        $eve = User::where('email', 'eve@acme.com')->first();
+        $roles = ['admin', 'manager', 'member', 'support'];
+        $count = 0;
 
-        $efoods = Division::where('slug', 'compass-group-efoods')->first();
-        $bidfood = Division::where('slug', 'compass-group-bidfood')->first();
-        $catering = Division::where('slug', 'compass-group-catering')->first();
-        $sales = Division::where('slug', 'acme-corp-sales')->first();
-        $engineering = Division::where('slug', 'acme-corp-engineering')->first();
-        $marketing = Division::where('slug', 'acme-corp-marketing')->first();
+        Tenant::all()->each(function (Tenant $tenant) use ($roles, &$count) {
+            $users = User::where('tenant_id', $tenant->id)->get();
+            $divisions = Division::where('tenant_id', $tenant->id)->get();
 
-        DB::table('user_divisions')->insert([
-            ['user_id' => $alice->id, 'division_id' => $efoods->id, 'role' => 'admin', 'created_at' => now(), 'updated_at' => now()],
-            ['user_id' => $alice->id, 'division_id' => $bidfood->id, 'role' => 'admin', 'created_at' => now(), 'updated_at' => now()],
-            ['user_id' => $alice->id, 'division_id' => $catering->id, 'role' => 'admin', 'created_at' => now(), 'updated_at' => now()],
-        ]);
+            $firstUser = $users->first();
+            $divisions->each(function (Division $division) use ($firstUser, &$count) {
+                DB::table('user_divisions')->insert([
+                    'user_id' => $firstUser->id,
+                    'division_id' => $division->id,
+                    'role' => 'admin',
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+                $count++;
+            });
 
-        DB::table('user_divisions')->insert([
-            ['user_id' => $bob->id, 'division_id' => $efoods->id, 'role' => 'manager', 'created_at' => now(), 'updated_at' => now()],
-            ['user_id' => $bob->id, 'division_id' => $bidfood->id, 'role' => 'member', 'created_at' => now(), 'updated_at' => now()],
-        ]);
+            $users->skip(1)->each(function (User $user) use ($divisions, $roles, &$count) {
+                $assigned = $divisions->random(min(2, $divisions->count()));
 
-        DB::table('user_divisions')->insert([
-            ['user_id' => $carol->id, 'division_id' => $efoods->id, 'role' => 'member', 'created_at' => now(), 'updated_at' => now()],
-        ]);
+                collect($assigned)->each(function (Division $division) use ($user, $roles, &$count) {
+                    $exists = DB::table('user_divisions')
+                        ->where('user_id', $user->id)
+                        ->where('division_id', $division->id)
+                        ->exists();
 
-        DB::table('user_divisions')->insert([
-            ['user_id' => $david->id, 'division_id' => $sales->id, 'role' => 'admin', 'created_at' => now(), 'updated_at' => now()],
-            ['user_id' => $david->id, 'division_id' => $engineering->id, 'role' => 'admin', 'created_at' => now(), 'updated_at' => now()],
-            ['user_id' => $david->id, 'division_id' => $marketing->id, 'role' => 'admin', 'created_at' => now(), 'updated_at' => now()],
-        ]);
+                    if (!$exists) {
+                        DB::table('user_divisions')->insert([
+                            'user_id' => $user->id,
+                            'division_id' => $division->id,
+                            'role' => $roles[array_rand($roles)],
+                            'created_at' => now(),
+                            'updated_at' => now(),
+                        ]);
+                        $count++;
+                    }
+                });
+            });
+        });
 
-        DB::table('user_divisions')->insert([
-            ['user_id' => $eve->id, 'division_id' => $sales->id, 'role' => 'manager', 'created_at' => now(), 'updated_at' => now()],
-        ]);
-
-        $this->command->info('✅ Created user-division assignments');
+        $this->command->info('✅ Created ' . $count . ' user-division assignments');
     }
 }

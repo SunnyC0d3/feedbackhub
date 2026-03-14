@@ -2,6 +2,11 @@
 
 namespace App\Providers;
 
+use App\Events\FeedbackCreated;
+use App\Events\FeedbackStatusChanged;
+use App\Listeners\ClearMetricsCacheOnFeedback;
+use App\Listeners\EmbedFeedbackOnCreated;
+use App\Listeners\NotifyOnFeedbackCreated;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Auth\Listeners\SendEmailVerificationNotification;
 use Illuminate\Foundation\Support\Providers\EventServiceProvider as ServiceProvider;
@@ -17,6 +22,14 @@ class EventServiceProvider extends ServiceProvider
     protected $listen = [
         Registered::class => [
             SendEmailVerificationNotification::class,
+        ],
+        FeedbackCreated::class => [
+            NotifyOnFeedbackCreated::class,
+            EmbedFeedbackOnCreated::class,
+            'App\Listeners\ClearMetricsCacheOnFeedback@handleCreated',
+        ],
+        FeedbackStatusChanged::class => [
+            'App\Listeners\ClearMetricsCacheOnFeedback@handleStatusChanged',
         ],
     ];
 

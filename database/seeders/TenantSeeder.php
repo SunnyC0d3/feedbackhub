@@ -9,17 +9,8 @@ class TenantSeeder extends Seeder
 {
     public function run(): void
     {
-        Tenant::create([
-            'name' => 'Compass Group',
-            'slug' => 'compass-group',
-            'active' => true,
-        ]);
-
-        Tenant::create([
-            'name' => 'Acme Corporation',
-            'slug' => 'acme-corp',
-            'active' => true,
-        ]);
+        Tenant::factory()->compassGroup()->create();
+        Tenant::factory()->acmeCorp()->create();
 
         $this->command->info('✅ Created 2 tenants');
     }

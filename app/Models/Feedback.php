@@ -2,8 +2,8 @@
 
 namespace App\Models;
 
-use App\Jobs\SendIdempotentFeedbackNotification;
-use App\Jobs\StoreFeedbackEmbedding;
+use App\Events\FeedbackCreated;
+use App\Events\FeedbackStatusChanged;
 use App\Models\Concerns\BelongsToTenant;
 use App\Services\LogService;
 use App\Services\MetricsService;
@@ -12,7 +12,6 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class Feedback extends Model
@@ -69,22 +68,7 @@ class Feedback extends Model
                 'event' => 'feedback_created',
             ]);
 
-            SendIdempotentFeedbackNotification::dispatch($feedback->id);
-
-            LogService::info('Feedback notification job dispatched', [
-                'feedback_id' => $feedback->id,
-                'job' => 'SendIdempotentNotification',
-                'event' => 'job_dispatched',
-            ]);
-
-            MetricsService::clearMetricsCache($feedback->tenant_id);
-
-            StoreFeedbackEmbedding::dispatch($feedback->id);
-
-            LogService::info('Feedback embedding job dispatched', [
-                'feedback_id' => $feedback->id,
-                'event' => 'embedding_job_dispatched',
-            ]);
+            FeedbackCreated::dispatch($feedback);
         });
 
         static::updated(function (Feedback $feedback) {
@@ -96,6 +80,12 @@ class Feedback extends Model
                     'changed_by' => auth()->id(),
                     'event' => 'feedback_status_changed',
                 ]);
+
+                FeedbackStatusChanged::dispatch(
+                    $feedback,
+                    $feedback->getOriginal('status'),
+                    $feedback->status,
+                );
             }
 
             MetricsService::clearMetricsCache($feedback->tenant_id);

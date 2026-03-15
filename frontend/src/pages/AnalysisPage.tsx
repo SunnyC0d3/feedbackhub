@@ -51,15 +51,17 @@ export default function AnalysisPage() {
 
       {result && (
         <div className="space-y-5">
-          <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-5">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="font-semibold text-indigo-800">AI Summary</h2>
-              <div className="text-xs text-indigo-500">
-                {result.feedback_found} matches &middot; {result.usage.tokens_used} tokens &middot; ${result.usage.cost_usd.toFixed(6)} USD
+          {result.summary && (
+            <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-5">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="font-semibold text-indigo-800">AI Summary</h2>
+                <div className="text-xs text-indigo-500">
+                  {result.feedback_found} matches &middot; {result.usage.tokens_used} tokens &middot; ${result.usage.cost_usd!.toFixed(6)} USD
+                </div>
               </div>
+              <p className="text-sm text-gray-700 whitespace-pre-line">{result.summary}</p>
             </div>
-            <p className="text-sm text-gray-700 whitespace-pre-line">{result.summary}</p>
-          </div>
+          )}
 
           <div>
             <h2 className="font-semibold text-gray-700 mb-3">Matched Feedback</h2>

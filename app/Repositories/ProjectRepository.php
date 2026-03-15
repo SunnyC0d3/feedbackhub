@@ -3,6 +3,7 @@
 namespace App\Repositories;
 
 use App\Models\Project;
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Collection;
 
 class ProjectRepository
@@ -41,5 +42,14 @@ class ProjectRepository
             ->withCount('feedbacks')
             ->orderBy('name')
             ->get();
+    }
+
+    public function paginateForTenant(int $tenantId, int $perPage = 20): LengthAwarePaginator
+    {
+        return Project::where('tenant_id', $tenantId)
+            ->withCount('feedbacks')
+            ->with('division')
+            ->orderBy('name')
+            ->paginate($perPage);
     }
 }

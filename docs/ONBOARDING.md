@@ -184,7 +184,32 @@ php artisan make:test CommentTest
 php artisan test --filter=CommentTest
 ```
 
-### Step 7 — Cache invalidation
+### Step 7 — Controller, Request, and Resource (if exposing via API)
+
+If the feature needs an HTTP endpoint:
+
+```bash
+# Create the controller
+php artisan make:controller CommentController
+
+# Create a form request for validation
+php artisan make:request CreateCommentRequest
+
+# Create an API resource for JSON output
+php artisan make:resource CommentResource
+```
+
+Wire the route in `routes/api.php` inside the `auth:sanctum` group. Keep controllers thin — delegate immediately to the service.
+
+```php
+// routes/api.php
+Route::get('/feedback/{feedback}/comments', [CommentController::class, 'index']);
+Route::post('/feedback/{feedback}/comments', [CommentController::class, 'store']);
+```
+
+Document the new endpoints in `docs/API.md`.
+
+### Step 8 — Cache invalidation
 
 If your feature affects any cached data (dashboard metrics, project counts, etc.), add cache invalidation to the relevant listener or model observer.
 

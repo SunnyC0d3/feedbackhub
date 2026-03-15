@@ -3,6 +3,7 @@
 namespace App\Repositories;
 
 use App\Models\Feedback;
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Collection;
 
 class FeedbackRepository
@@ -51,5 +52,29 @@ class FeedbackRepository
             ->orderBy('created_at', 'desc')
             ->limit($limit)
             ->get();
+    }
+
+    public function paginateForTenant(int $tenantId, ?string $status = null, int $perPage = 20): LengthAwarePaginator
+    {
+        $query = Feedback::where('tenant_id', $tenantId)
+            ->orderBy('created_at', 'desc');
+
+        if ($status) {
+            $query->where('status', $status);
+        }
+
+        return $query->paginate($perPage);
+    }
+
+    public function paginateByProject(int $projectId, ?string $status = null, int $perPage = 20): LengthAwarePaginator
+    {
+        $query = Feedback::where('project_id', $projectId)
+            ->orderBy('created_at', 'desc');
+
+        if ($status) {
+            $query->where('status', $status);
+        }
+
+        return $query->paginate($perPage);
     }
 }

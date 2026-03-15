@@ -155,7 +155,7 @@ Every OpenAI API call logs token usage and estimated cost. `AiService` aggregate
 ## Running Tests
 
 ```bash
-# Full test suite (31 tests, 80 assertions)
+# Full test suite (69 tests, 196 assertions)
 php artisan test
 
 # By suite
@@ -217,11 +217,48 @@ docs/
 
 ---
 
+## API
+
+FeedbackHub exposes a REST API using Laravel Sanctum token authentication.
+
+```bash
+# Login (returns a token)
+curl -X POST http://localhost/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"tenant_slug":"compass-group","email":"alice@compass.com","password":"password"}'
+
+# Use the token on subsequent requests
+curl http://localhost/api/feedback \
+  -H "Authorization: Bearer <token>"
+```
+
+**Endpoints at a glance:**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/auth/login` | Get a token |
+| `POST` | `/api/auth/logout` | Revoke token |
+| `GET`  | `/api/me` | Current user |
+| `GET`  | `/api/divisions` | List divisions |
+| `GET`  | `/api/projects` | List projects |
+| `GET`  | `/api/projects/{id}/feedback` | Feedback for a project |
+| `POST` | `/api/projects/{id}/summarize` | AI summary of project feedback |
+| `GET`  | `/api/feedback` | List feedback (filter by `?status=`) |
+| `POST` | `/api/feedback` | Create feedback |
+| `PATCH`| `/api/feedback/{id}/status` | Update status |
+| `DELETE`| `/api/feedback/{id}` | Soft-delete feedback |
+| `POST` | `/api/analysis/query` | Semantic search + AI summary |
+| `GET`  | `/api/metrics` | Tenant dashboard metrics |
+
+Full request/response documentation: [docs/API.md](docs/API.md)
+
+---
+
 ## Further Reading
 
+- [API Reference](docs/API.md) — all endpoints, request/response shapes, error codes
 - [Architecture Decision Records](docs/adr/) — why key decisions were made
 - [System Diagrams](docs/DIAGRAMS.md) — data flow, isolation model, API integrations
 - [Architecture Reference](docs/ARCHITECTURE.md) — full domain documentation
-- [Deployment Guide](docs/DEPLOYMENT.md) — production setup
 - [Runbook](docs/RUNBOOK.md) — operational procedures for on-call
 - [Onboarding Guide](docs/ONBOARDING.md) — how to add features and debug issues

@@ -3,7 +3,8 @@
 Operational procedures for diagnosing and resolving production issues.
 
 **Audience:** Developers on-call or responding to an incident.
-**Assumption:** You have SSH access to the server and can run `php artisan` commands.
+**Assumption (local/staging):** You have shell access and can run `php artisan` commands.
+**Assumption (production/AWS):** You have AWS CLI access and can exec into ECS tasks or tail CloudWatch logs. See `docs/DEPLOYMENT.md` for the production architecture. Key difference: production uses **SQS for queues** and **ElastiCache Redis for cache only** — Redis going down does not affect job processing in production.
 
 ---
 
@@ -131,20 +132,33 @@ ps aux | grep "queue:work"
 ### Fix — worker not running
 
 ```bash
-# Start a worker manually
+# Local: start a worker manually
 php artisan queue:work redis --verbose
 
-# Or if using Supervisor
+# Local: or if using Supervisor
 supervisorctl status
 supervisorctl start feedbackhub-worker:*
+
+# Production (AWS): force a new ECS deployment for the worker service
+aws ecs update-service \
+  --cluster feedbackhub-prod \
+  --service feedbackhub-worker \
+  --force-new-deployment
 ```
 
 ### Fix — worker running but slow
 
 ```bash
-# Run additional workers to drain the backlog (run in separate terminals)
+# Local: run additional workers to drain the backlog (separate terminals)
 php artisan queue:work redis --verbose
 php artisan queue:work redis --verbose
+
+# Production (AWS): increase desired task count on the worker service
+aws ecs update-service \
+  --cluster feedbackhub-prod \
+  --service feedbackhub-worker \
+  --desired-count 3
+# Scale back down once the queue drains (auto-scaling will also handle this)
 ```
 
 Kill the extra workers once the queue drains (Ctrl+C).
@@ -270,6 +284,8 @@ php artisan tinker
 
 ### Impact while Redis is down
 
+**Local / staging** (Redis handles both cache and queues):
+
 | Feature | Impact |
 |---------|--------|
 | Caching | All cache misses — database takes full load |
@@ -282,6 +298,17 @@ After Redis recovers, restart the queue worker to reconnect:
 ```bash
 php artisan queue:restart
 ```
+
+**Production / AWS** (Redis is cache-only; jobs use SQS):
+
+| Feature | Impact |
+|---------|--------|
+| Caching | All cache misses — database takes full load |
+| Job queue | **No impact** — SQS is independent of Redis |
+| Idempotency keys | Lost for the downtime window |
+| AI usage tracking | Usage data lost for the downtime window |
+
+In production, jobs continue to process normally even when ElastiCache is unavailable. Only caching is affected.
 
 ---
 

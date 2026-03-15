@@ -77,6 +77,24 @@ class User extends Authenticatable
         return $this->hasMany(Invitation::class);
     }
 
+    public function getHighestRole(): string
+    {
+        $priority = ['admin' => 4, 'manager' => 3, 'member' => 2, 'support' => 1];
+
+        $roles = $this->divisions()
+            ->withoutGlobalScopes()
+            ->pluck('user_divisions.role')
+            ->toArray();
+
+        if (empty($roles)) {
+            return 'support';
+        }
+
+        usort($roles, fn ($a, $b) => ($priority[$b] ?? 0) <=> ($priority[$a] ?? 0));
+
+        return $roles[0];
+    }
+
     public function getCachedDivisions()
     {
         $key = CacheService::key('user:divisions', $this->id);

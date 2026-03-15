@@ -1,6 +1,7 @@
 # FeedbackHub — API Reference
 
-Base URL: `http://localhost/api`
+Base URL (local): `http://localhost:8000/api`
+Base URL (production): `https://api.yourdomain.com/api`
 
 Authentication uses **Laravel Sanctum** (token-based). Include the token in every authenticated request:
 
@@ -34,7 +35,7 @@ All responses are JSON. Validation errors return `422` with an `errors` object. 
 
 Use `?page=2` to navigate. Default page size is 20 on all list endpoints.
 
-**Authorization:** Write operations on feedback are role-restricted. Roles are assigned per-division in `user_divisions`.
+**Authorization:** Write operations on feedback are role-restricted. Roles are assigned per-division in `user_divisions`. The `role` field on every user response reflects their **highest** role across all divisions they belong to (`admin > manager > member > support`).
 
 | Role | Create | Update Status | Delete |
 |------|--------|---------------|--------|
@@ -42,6 +43,8 @@ Use `?page=2` to navigate. Default page size is 20 on all list endpoints.
 | `member` | ✓ | ✗ | ✗ |
 | `manager` | ✓ | ✓ | ✗ |
 | `admin` | ✓ | ✓ | ✓ |
+
+Unauthorized write attempts return `403`.
 
 ---
 
@@ -70,6 +73,7 @@ Email uniqueness is per-tenant, so the tenant must be identified at login via it
     "name": "Alice Smith",
     "email": "alice@compass.com",
     "tenant_id": 1,
+    "role": "admin",
     "created_at": "2026-01-01T00:00:00.000000Z"
   }
 }
@@ -104,6 +108,7 @@ Revokes the current token.
   "name": "Alice Smith",
   "email": "alice@compass.com",
   "tenant_id": 1,
+  "role": "admin",
   "created_at": "2026-01-01T00:00:00.000000Z"
 }
 ```
@@ -226,7 +231,7 @@ Returns the 50 most recent feedback items for the tenant. Filter by status using
 |-----------|--------|--------------------------------------|
 | `status`  | string | Optional. Filter by a single status. |
 
-**Valid status values:** `open`, `draft`, `seen`, `pending`, `review_required`, `in_progress`, `resolved`
+**Valid status values:** `draft`, `open`, `seen`, `pending`, `review_required`, `in_progress`, `resolved`, `closed`
 
 **Response `200`**
 ```json
@@ -290,7 +295,7 @@ Side effects (async, via queue):
 { "status": "in_progress" }
 ```
 
-**Valid values:** `open`, `draft`, `seen`, `pending`, `review_required`, `in_progress`, `resolved`
+**Valid values:** `draft`, `open`, `seen`, `pending`, `review_required`, `in_progress`, `resolved`, `closed`
 
 **Response `200`** — updated feedback resource.
 **Response `404`** — not found or belongs to another tenant.
@@ -393,6 +398,7 @@ Returns cached business metrics for the authenticated tenant. Cache TTL: 5 minut
 | Status | Meaning |
 |--------|---------|
 | `401`  | Unauthenticated — missing or invalid token |
+| `403`  | Forbidden — authenticated but role does not permit this action |
 | `404`  | Resource not found or belongs to another tenant |
 | `422`  | Validation failed |
 | `500`  | Server error — check logs |

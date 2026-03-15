@@ -19,5 +19,6 @@ yarn-error.log
 /.vscode
 *:Zone.Identifier
 
-CURRENTSTATE.md
+frontend/node_modules
+
 CLAUDE.md

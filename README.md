@@ -2,7 +2,7 @@
 
 A multi-tenant SaaS feedback and issue tracking platform with AI-powered semantic search and analysis.
 
-Built with **Laravel 11**, **MySQL**, **Redis**, **OpenAI**, and **Pinecone**.
+Built with **Laravel 11**, **MySQL**, **Redis**, **OpenAI**, **Pinecone**, and a **React 18 + TypeScript** frontend.
 
 ---
 
@@ -28,6 +28,7 @@ Built with **Laravel 11**, **MySQL**, **Redis**, **OpenAI**, and **Pinecone**.
 | AI — Summarization | OpenAI GPT-4o-mini |
 | AI — Embeddings | OpenAI text-embedding-3-small |
 | Vector Database | Pinecone (feedback-embeddings index) |
+| Frontend | React 18, TypeScript, Vite, TanStack Query, Axios, Tailwind CSS |
 
 ---
 
@@ -35,14 +36,14 @@ Built with **Laravel 11**, **MySQL**, **Redis**, **OpenAI**, and **Pinecone**.
 
 ### Prerequisites
 
-- PHP 8.1+
+- PHP 8.1+, Composer
+- Node.js 18+, npm
 - MySQL 8.0 (running on port 3307 by default)
 - Redis
-- Composer
 - OpenAI API key
 - Pinecone API key + index
 
-### Installation
+### Backend
 
 ```bash
 # Install dependencies
@@ -59,8 +60,19 @@ php artisan key:generate
 # Run migrations and seed test data
 php artisan migrate --seed
 
+# Start the dev server
+php artisan serve
+
 # Start the queue worker (separate terminal)
 php artisan queue:work redis --verbose
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev   # http://localhost:5173 (proxies /api → http://localhost:8000)
 ```
 
 ### Environment Variables
@@ -206,11 +218,20 @@ app/
 ├── Queries/           # CQRS read queries
 ├── Repositories/      # Data access layer
 └── Services/          # Business logic and external API integrations
+frontend/
+├── src/
+│   ├── api/           # Axios client + typed API functions (one file per resource)
+│   ├── components/    # Layout, Pagination, ProtectedRoute, StatusBadge
+│   ├── context/       # AuthContext (token + user storage)
+│   ├── hooks/         # useRole
+│   ├── pages/         # 10 route-level page components
+│   └── types/         # TypeScript interfaces matching API shapes exactly
+└── vite.config.ts     # /api proxy → http://localhost:8000
 docs/
 ├── adr/               # Architecture Decision Records
-├── ARCHITECTURE.md    # Detailed domain documentation
+├── API.md             # Full REST API reference
 ├── DIAGRAMS.md        # Mermaid system diagrams
-├── DEPLOYMENT.md      # Production deployment guide
+├── DEPLOYMENT.md      # AWS deployment guide (planned — Month 8)
 ├── ONBOARDING.md      # Guide for new developers
 └── RUNBOOK.md         # Operational procedures
 ```
@@ -262,3 +283,4 @@ Full request/response documentation: [docs/API.md](docs/API.md)
 - [Architecture Reference](docs/ARCHITECTURE.md) — full domain documentation
 - [Runbook](docs/RUNBOOK.md) — operational procedures for on-call
 - [Onboarding Guide](docs/ONBOARDING.md) — how to add features and debug issues
+- [AWS Deployment Guide](docs/DEPLOYMENT.md) — ECS, RDS, SQS, Lambda, CloudFront, CI/CD

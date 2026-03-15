@@ -56,6 +56,8 @@ Every call to `AiService::summarizeFeedback()` costs real money. Every call to `
 
 ## 2. Local Setup
 
+### Backend
+
 ```bash
 # 1. Install dependencies
 composer install
@@ -76,9 +78,27 @@ php artisan migrate --seed
 # 6. Verify tests pass
 php artisan test
 
-# 7. Start queue worker (keep this running in a separate terminal)
+# 7. Start the dev server
+php artisan serve
+
+# 8. Start queue worker (separate terminal)
 php artisan queue:work redis --verbose
 ```
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev       # Vite dev server → http://localhost:5173
+npm run typecheck # Verify zero TypeScript errors
+```
+
+The Vite dev server proxies all `/api/*` requests to `http://localhost:8000`. Make sure `php artisan serve` is running before using the frontend.
+
+**Test login credentials (after seeding):**
+- Tenant slug: `compass-group`, email: `alice@compass.com`, password: `password`
+- Tenant slug: `acme-corporation`, email: `david@acme.com`, password: `password`
 
 ### Verify your setup with tinker
 
@@ -209,7 +229,21 @@ Route::post('/feedback/{feedback}/comments', [CommentController::class, 'store']
 
 Document the new endpoints in `docs/API.md`.
 
-### Step 8 — Cache invalidation
+### Step 8 — Frontend (if exposing via API)
+
+If the new endpoint needs a UI:
+
+1. **Add a typed API function** in the matching `frontend/src/api/*.ts` file. Every function must have a typed return — no `any`.
+
+2. **Update `frontend/src/types/index.ts`** if the response shape is new or changed.
+
+3. **Add a page or extend an existing one** in `frontend/src/pages/`. Use `useQuery` for reads, `useMutation` for writes.
+
+4. **Wire the route** in `frontend/src/App.tsx` if it's a new page.
+
+5. **Verify TypeScript:** `cd frontend && npm run typecheck` — must pass with zero errors before considering the feature done.
+
+### Step 9 — Cache invalidation
 
 If your feature affects any cached data (dashboard metrics, project counts, etc.), add cache invalidation to the relevant listener or model observer.
 
@@ -332,7 +366,19 @@ app(App\Services\MetricsService::class)->clearMetricsCache($tenantId);
 
 Or better: fire a domain event and let `ClearMetricsCacheOnFeedback` handle it.
 
-### Pitfall 6 — Hard-deleting when you should soft-delete
+### Pitfall 6 — Calling axios directly in frontend components
+
+```ts
+// WRONG — bypasses the typed API layer
+const res = await axios.get('/api/feedback')
+
+// CORRECT — go through src/api/feedback.ts
+const res = await getFeedback(page, statusFilter)
+```
+
+All API calls must go through `frontend/src/api/`. This keeps types consistent and the interceptor (auth header, 401 redirect) always applies.
+
+### Pitfall 7 — Hard-deleting when you should soft-delete
 
 Core tables (`tenants`, `users`, `projects`, `feedback`, `divisions`) use soft deletes. Always call `->delete()` on these models — Laravel will soft-delete automatically. Never use `->forceDelete()` unless you have a specific, reviewed reason.
 
@@ -372,4 +418,5 @@ Use this when reviewing PRs or self-reviewing before pushing.
 - [ ] Happy path is tested
 - [ ] Tenant isolation is tested
 - [ ] External APIs (OpenAI, Pinecone) are mocked — no real API calls in tests
-- [ ] All 31+ existing tests still pass (`php artisan test`)
+- [ ] All 69 existing tests still pass (`php artisan test`)
+- [ ] Frontend TypeScript has zero errors (`cd frontend && npm run typecheck`)

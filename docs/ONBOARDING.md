@@ -364,7 +364,7 @@ If you add a write operation (create, update, delete) that affects cached data, 
 app(App\Services\MetricsService::class)->clearMetricsCache($tenantId);
 ```
 
-Or better: fire a domain event and let `ClearMetricsCacheOnFeedback` handle it.
+Or better: call `MetricsService::clearMetricsCache($tenantId)` directly, or trigger it via the `Feedback` model's lifecycle hooks.
 
 ### Pitfall 6 — Calling axios directly in frontend components
 
@@ -412,7 +412,7 @@ Use this when reviewing PRs or self-reviewing before pushing.
 
 ### Caching
 - [ ] Write operations that affect cached data trigger cache invalidation
-- [ ] New cache keys follow the tenant-scoped naming convention in `CacheService`
+- [ ] New cache keys are tenant-scoped (e.g. `metrics:{tenantId}`, `ai_usage:{tenantId}:{date}`)
 
 ### Testing
 - [ ] Happy path is tested

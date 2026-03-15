@@ -200,11 +200,10 @@ php artisan cache:clear
 
 ### Cache not invalidating after updates
 
-Check that model events are firing. The `ClearMetricsCacheOnFeedback` listener handles both `FeedbackCreated` and `FeedbackStatusChanged`. If invalidation is broken:
+Check that model events are firing. Metrics cache is cleared in `Feedback::booted()` on `created`, `updated`, and `deleted` hooks via `MetricsService::clearMetricsCache()`. If invalidation is broken:
 
-1. Check `EventServiceProvider` — confirm listeners are registered
-2. Confirm the model is firing events (not using `withoutEvents()` in the code path)
-3. Check Redis connectivity
+1. Confirm the model is firing events (not using `withoutEvents()` in the code path)
+2. Check Redis connectivity
 
 ---
 

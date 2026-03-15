@@ -24,14 +24,12 @@ We use **Laravel's event/listener system** to decouple feedback lifecycle events
 **Listeners:**
 - `NotifyOnFeedbackCreated` — dispatches `SendIdempotentFeedbackNotification` job
 - `EmbedFeedbackOnCreated` — dispatches `StoreFeedbackEmbedding` job
-- `ClearMetricsCacheOnFeedback` — clears tenant metrics cache (handles both events)
 
-The `Feedback` model fires events; it has no knowledge of what listens to them. Listeners are registered in `EventServiceProvider`.
+The `Feedback` model fires events; it has no knowledge of what listens to them. Listeners are registered in `EventServiceProvider`. Metrics cache invalidation is handled directly in the `Feedback` model's `booted()` hooks (`created`, `updated`, `deleted`) via `MetricsService::clearMetricsCache()`.
 
 We also introduced a **light CQRS pattern**:
 - Commands: `CreateFeedbackCommand`, `UpdateFeedbackStatusCommand` (write operations)
-- Queries: `GetProjectFeedbackQuery`, `GetTenantMetricsQuery` (read operations)
-- `FeedbackManagementService` executes commands; `FeedbackAnalysisService` handles query + AI pipeline
+- `FeedbackManagementService` executes commands; `FeedbackAnalysisService` handles the AI pipeline
 
 ## Consequences
 

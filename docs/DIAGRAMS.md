@@ -20,7 +20,7 @@ graph TB
         SVC[Service Layer<br/>FeedbackAnalysisService<br/>FeedbackManagementService<br/>AiService / CacheService]
         REPO[Repository Layer<br/>FeedbackRepository<br/>ProjectRepository]
         EVENTS[Event System<br/>FeedbackCreated<br/>FeedbackStatusChanged]
-        LISTENERS[Listeners<br/>NotifyOnFeedbackCreated<br/>EmbedFeedbackOnCreated<br/>ClearMetricsCacheOnFeedback]
+        LISTENERS[Listeners<br/>NotifyOnFeedbackCreated<br/>EmbedFeedbackOnCreated]
         JOBS[Background Jobs<br/>StoreFeedbackEmbedding<br/>SendIdempotentNotification<br/>CleanupExpiredInvitations]
     end
 
@@ -176,7 +176,6 @@ graph LR
         AS[AiService]
         ES[EmbeddingService]
         PS[PineconeService]
-        CS[CacheService]
         JM[JobMonitor]
         Q[Queue Worker]
     end
@@ -208,7 +207,8 @@ graph LR
     PS -->|"query vector + tenant filter"| IDX
     IDX -->|"top-K matches + scores"| PS
 
-    CS --> CACHE
+    AS --> CACHE
+    JM --> CACHE
     Q --> QUEUE
     JM --> QUEUE
     Q --> IDEMPOTENCY

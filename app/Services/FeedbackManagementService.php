@@ -39,18 +39,9 @@ class FeedbackManagementService
     public function createFeedback(array $data, int $tenantId): Feedback
     {
         return DB::transaction(function () use ($data, $tenantId) {
-            $feedback = Feedback::create(array_merge($data, [
+            return Feedback::create(array_merge($data, [
                 'tenant_id' => $tenantId,
             ]));
-
-            LogService::info('Feedback created via FeedbackManagementService', [
-                'feedback_id' => $feedback->id,
-                'tenant_id' => $tenantId,
-                'project_id' => $feedback->project_id,
-                'event' => 'feedback_management_created',
-            ]);
-
-            return $feedback;
         });
     }
 
@@ -60,25 +51,11 @@ class FeedbackManagementService
 
         $feedback->update(['status' => $newStatus]);
 
-        LogService::info('Feedback status updated via FeedbackManagementService', [
-            'feedback_id' => $feedback->id,
-            'tenant_id' => $feedback->tenant_id,
-            'old_status' => $oldStatus,
-            'new_status' => $newStatus,
-            'event' => 'feedback_management_status_updated',
-        ]);
-
         return $feedback->fresh();
     }
 
     public function deleteFeedback(Feedback $feedback): void
     {
-        LogService::info('Feedback deleted via FeedbackManagementService', [
-            'feedback_id' => $feedback->id,
-            'tenant_id' => $feedback->tenant_id,
-            'event' => 'feedback_management_deleted',
-        ]);
-
         $feedback->delete();
     }
 }

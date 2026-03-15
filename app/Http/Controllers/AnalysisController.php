@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use App\Http\Requests\AnalyzeFeedbackRequest;
 use App\Http\Resources\AnalysisResource;
 use App\Repositories\FeedbackRepository;
-use App\Services\AIService;
 use App\Services\FeedbackAnalysisService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -14,8 +13,7 @@ class AnalysisController extends Controller
 {
     public function __construct(
         private FeedbackAnalysisService $analysis,
-        private FeedbackRepository $repository,
-        private AIService $ai,
+        private FeedbackRepository $repository
     ) {}
 
     public function query(AnalyzeFeedbackRequest $request): AnalysisResource

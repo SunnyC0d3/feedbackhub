@@ -68,6 +68,7 @@ class Feedback extends Model
                 'event' => 'feedback_created',
             ]);
 
+            MetricsService::clearMetricsCache($feedback->tenant_id);
             FeedbackCreated::dispatch($feedback);
         });
 

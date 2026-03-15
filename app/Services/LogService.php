@@ -128,41 +128,4 @@ class LogService
         ]));
     }
 
-    public static function getSystemHealth(): array
-    {
-        $health = [
-            'timestamp' => now()->toIso8601String(),
-            'failed_jobs_count' => JobMonitor::getFailedJobsCount(),
-        ];
-
-        self::info('System health check', array_merge($health, [
-            'event' => 'health_check',
-        ]));
-
-        return $health;
-    }
-
-    public static function retryFailedJob(int $jobId): bool
-    {
-        self::info('Attempting to retry failed job', [
-            'job_id' => $jobId,
-            'event' => 'job_retry_attempt',
-        ]);
-
-        $success = JobMonitor::retryFailedJob($jobId);
-
-        if ($success) {
-            self::info('Failed job retry successful', [
-                'job_id' => $jobId,
-                'event' => 'job_retry_success',
-            ]);
-        } else {
-            self::error('Failed job retry failed', [
-                'job_id' => $jobId,
-                'event' => 'job_retry_failed',
-            ]);
-        }
-
-        return $success;
-    }
 }

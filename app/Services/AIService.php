@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Support\Facades\Cache;
 use OpenAI;
 
 class AIService
@@ -115,9 +116,9 @@ class AIService
     private function trackUsage(int $tenantId, int $tokens, float $cost): void
     {
         $date = now()->format('Y-m-d');
-        $cacheKey = CacheService::key('ai_usage', $tenantId, $date);
+        $cacheKey = "ai_usage:{$tenantId}:{$date}";
 
-        $usage = CacheService::get($cacheKey);
+        $usage = Cache::get($cacheKey);
 
         if (!$usage) {
             $usage = [
@@ -133,7 +134,7 @@ class AIService
         $usage['total_cost'] = round($usage['total_cost'] + $cost, 6);
         $usage['requests'] += 1;
 
-        CacheService::put($cacheKey, $usage, CacheService::TTL_DAY * 7);
+        Cache::put($cacheKey, $usage, 86400 * 7);
 
         LogService::info('AI usage tracked', [
             'tenant_id' => $tenantId,
@@ -152,9 +153,9 @@ class AIService
 
         for ($i = 0; $i < $days; $i++) {
             $date = now()->subDays($i)->format('Y-m-d');
-            $cacheKey = CacheService::key('ai_usage', $tenantId, $date);
+            $cacheKey = "ai_usage:{$tenantId}:{$date}";
 
-            $data = CacheService::get($cacheKey);
+            $data = Cache::get($cacheKey);
 
             if ($data) {
                 $stats[] = $data;
@@ -167,9 +168,9 @@ class AIService
     public function checkUsageLimits(int $tenantId, float $dailyLimit = 1.00): bool
     {
         $date = now()->format('Y-m-d');
-        $cacheKey = CacheService::key('ai_usage', $tenantId, $date);
+        $cacheKey = "ai_usage:{$tenantId}:{$date}";
 
-        $usage = CacheService::get($cacheKey);
+        $usage = Cache::get($cacheKey);
 
         if (!$usage) {
             return true;

@@ -117,7 +117,7 @@ See [ADR 001](docs/adr/001-multi-tenant-shared-database.md) for the decision rat
 The `Feedback` model fires domain events (`FeedbackCreated`, `FeedbackStatusChanged`). Listeners handle side effects independently:
 - `NotifyOnFeedbackCreated` → dispatches notification job
 - `EmbedFeedbackOnCreated` → dispatches embedding job
-- `ClearMetricsCacheOnFeedback` → invalidates cached dashboard metrics
+- Metrics cache invalidation is handled in `Feedback::booted()` directly
 
 This keeps the model decoupled from infrastructure concerns.
 
@@ -126,7 +126,7 @@ See [ADR 006](docs/adr/006-event-driven-architecture.md) for the decision ration
 ### 3. Service + Repository Layers
 - **Services** — `FeedbackManagementService` (writes), `FeedbackAnalysisService` (AI pipeline)
 - **Repositories** — `FeedbackRepository`, `ProjectRepository` (data access)
-- **Light CQRS** — `CreateFeedbackCommand`, `UpdateFeedbackStatusCommand`, `GetProjectFeedbackQuery`, `GetTenantMetricsQuery`
+- **Light CQRS** — `CreateFeedbackCommand`, `UpdateFeedbackStatusCommand`
 
 ### 4. AI Pipeline
 ```

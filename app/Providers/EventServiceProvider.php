@@ -4,7 +4,6 @@ namespace App\Providers;
 
 use App\Events\FeedbackCreated;
 use App\Events\FeedbackStatusChanged;
-use App\Listeners\ClearMetricsCacheOnFeedback;
 use App\Listeners\EmbedFeedbackOnCreated;
 use App\Listeners\NotifyOnFeedbackCreated;
 use Illuminate\Auth\Events\Registered;
@@ -26,10 +25,6 @@ class EventServiceProvider extends ServiceProvider
         FeedbackCreated::class => [
             NotifyOnFeedbackCreated::class,
             EmbedFeedbackOnCreated::class,
-            'App\Listeners\ClearMetricsCacheOnFeedback@handleCreated',
-        ],
-        FeedbackStatusChanged::class => [
-            'App\Listeners\ClearMetricsCacheOnFeedback@handleStatusChanged',
         ],
     ];
 

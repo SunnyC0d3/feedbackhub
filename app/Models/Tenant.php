@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-use App\Services\CacheService;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -68,27 +67,4 @@ class Tenant extends Model
         return $this->hasMany(Project::class);
     }
 
-    public function getCachedDashboardMetrics(): array
-    {
-        $key = CacheService::key('tenant:dashboard', $this->id);
-
-        return CacheService::remember($key, CacheService::TTL_SHORT, function () {
-            return [
-                'divisions_count' => $this->divisions()->count(),
-                'users_count' => $this->users()->count(),
-                'projects_count' => $this->projects()->count(),
-                'feedback_count' => $this->feedbacks()->count(),
-                'pending_feedback_count' => $this->feedbacks()
-                    ->where('status', 'pending')
-                    ->count(),
-            ];
-        });
-    }
-
-    protected static function booted(): void
-    {
-        static::updated(function (Tenant $tenant) {
-            CacheService::forget("tenant:*:{$tenant->id}:*");
-        });
-    }
 }

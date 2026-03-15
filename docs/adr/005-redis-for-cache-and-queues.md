@@ -22,10 +22,10 @@ Laravel supports multiple drivers for each:
 - Cache stored in Redis database 1 (separate from default to avoid key collisions)
 - Queue connection: `redis` with a dedicated `default` queue
 - All tenant-scoped cache keys include `tenant_id` and (where applicable) `user_id`
-- Cache TTL constants defined in `CacheService`: SHORT (5min), MEDIUM (30min), LONG (1hr), DAY (24hr)
+- Cache TTL: MetricsService uses 300s (5min), AI usage tracking uses 7 days
 - Job retry policy: 3 attempts with exponential backoff [60s, 300s, 900s]
 
-A centralized `CacheService` handles all cache interactions, providing consistent key generation and tenant isolation. No code outside `CacheService` calls `Cache::` directly.
+Laravel's `Cache::` facade is used directly throughout the app. A `CacheService` wrapper was introduced in Month 2 but removed after it was found to be inconsistently adopted and added no real value over the facade itself.
 
 ## Consequences
 
@@ -49,4 +49,4 @@ The `database` queue driver works but uses MySQL for queue storage, adding write
 File cache doesn't support atomic operations needed for idempotency patterns, doesn't work across multiple web servers, and has no TTL management built in.
 
 **Cache invalidation strategy:**
-Cache is invalidated via Laravel model event listeners (`updated`, `deleted`) wired through the event system. The `ClearMetricsCacheOnFeedback` listener handles both `FeedbackCreated` and `FeedbackStatusChanged` events. This keeps invalidation decoupled from business logic.
+Metrics cache is invalidated directly in the `Feedback` model's `booted()` hooks (`created`, `updated`, `deleted`) via `MetricsService::clearMetricsCache()`. Model-level invalidation was chosen over a dedicated listener to avoid double-firing — the `booted()` hook fires for all writes regardless of how they originate.

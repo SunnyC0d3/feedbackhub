@@ -1,66 +1,227 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# FeedbackHub
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+A multi-tenant SaaS feedback and issue tracking platform with AI-powered semantic search and analysis.
 
-## About Laravel
+Built with **Laravel 11**, **MySQL**, **Redis**, **OpenAI**, and **Pinecone**.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+---
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Features
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+- **Multi-tenant isolation** — automatic `tenant_id` scoping via global Eloquent scopes; one tenant can never see another's data
+- **Hierarchical organisation** — Tenant → Division → Project → Feedback with role-based access (Admin, Manager, Member, Support)
+- **AI-powered summarization** — GPT-4o-mini generates structured summaries (themes, issues, positives, recommendations) across any feedback set
+- **Semantic search** — query feedback by meaning using OpenAI embeddings + Pinecone vector similarity
+- **Background job processing** — notifications and embeddings processed async via Redis queues with retry and idempotency
+- **Usage tracking and cost monitoring** — per-tenant daily AI spend tracked with configurable caps
+- **Structured observability** — JSON logs with request context, slow query detection, business metrics, and system health checks
 
-## Learning Laravel
+---
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+## Tech Stack
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
+| Layer | Technology |
+|-------|-----------|
+| Backend | PHP 8.1, Laravel 11 |
+| Database | MySQL 8.0 |
+| Cache & Queue | Redis |
+| AI — Summarization | OpenAI GPT-4o-mini |
+| AI — Embeddings | OpenAI text-embedding-3-small |
+| Vector Database | Pinecone (feedback-embeddings index) |
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+---
 
-## Laravel Sponsors
+## Quick Start
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+### Prerequisites
 
-### Premium Partners
+- PHP 8.1+
+- MySQL 8.0 (running on port 3307 by default)
+- Redis
+- Composer
+- OpenAI API key
+- Pinecone API key + index
 
-- **[Vehikl](https://vehikl.com/)**
-- **[Tighten Co.](https://tighten.co)**
-- **[WebReinvent](https://webreinvent.com/)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel/)**
-- **[Cyber-Duck](https://cyber-duck.co.uk)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Jump24](https://jump24.co.uk)**
-- **[Redberry](https://redberry.international/laravel/)**
-- **[Active Logic](https://activelogic.com)**
-- **[byte5](https://byte5.de)**
-- **[OP.GG](https://op.gg)**
+### Installation
 
-## Contributing
+```bash
+# Install dependencies
+composer install
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+# Copy environment file
+cp .env.example .env
 
-## Code of Conduct
+# Generate app key
+php artisan key:generate
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+# Configure your .env (see Environment Variables below)
 
-## Security Vulnerabilities
+# Run migrations and seed test data
+php artisan migrate --seed
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+# Start the queue worker (separate terminal)
+php artisan queue:work redis --verbose
+```
 
-## License
+### Environment Variables
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+```env
+# Database
+DB_CONNECTION=mysql
+DB_HOST=localhost
+DB_PORT=3307
+DB_DATABASE=feedbackhub
+DB_USERNAME=root
+DB_PASSWORD=
+
+# Cache & Queue
+CACHE_DRIVER=redis
+QUEUE_CONNECTION=redis
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+
+# OpenAI
+OPENAI_API_KEY=sk-proj-...
+
+# Pinecone
+PINECONE_API_KEY=...
+PINECONE_ENVIRONMENT=us-east-1-aws
+PINECONE_INDEX=feedback-embeddings
+PINECONE_HOST=feedback-embeddings-XXXXX.svc.aped-XXXX-XXXX.pinecone.io
+```
+
+---
+
+## Architecture
+
+FeedbackHub is built around four architectural pillars:
+
+### 1. Multi-Tenancy
+All tenants share one database. Every tenant-scoped table has a `tenant_id` column. A `TenantScope` global scope automatically appends `WHERE tenant_id = ?` to every query when a user is authenticated. The `BelongsToTenant` trait applies this scope and auto-sets `tenant_id` on record creation.
+
+See [ADR 001](docs/adr/001-multi-tenant-shared-database.md) for the decision rationale.
+
+### 2. Event-Driven Side Effects
+The `Feedback` model fires domain events (`FeedbackCreated`, `FeedbackStatusChanged`). Listeners handle side effects independently:
+- `NotifyOnFeedbackCreated` → dispatches notification job
+- `EmbedFeedbackOnCreated` → dispatches embedding job
+- `ClearMetricsCacheOnFeedback` → invalidates cached dashboard metrics
+
+This keeps the model decoupled from infrastructure concerns.
+
+See [ADR 006](docs/adr/006-event-driven-architecture.md) for the decision rationale.
+
+### 3. Service + Repository Layers
+- **Services** — `FeedbackManagementService` (writes), `FeedbackAnalysisService` (AI pipeline)
+- **Repositories** — `FeedbackRepository`, `ProjectRepository` (data access)
+- **Light CQRS** — `CreateFeedbackCommand`, `UpdateFeedbackStatusCommand`, `GetProjectFeedbackQuery`, `GetTenantMetricsQuery`
+
+### 4. AI Pipeline
+```
+User query
+  → EmbeddingService (OpenAI) → 1536-dim vector
+  → PineconeService → top-K similar feedback IDs
+  → FeedbackRepository → Feedback models
+  → AiService (GPT-4o-mini) → structured summary
+```
+
+Full architecture diagrams (including sequence diagrams) are in [docs/DIAGRAMS.md](docs/DIAGRAMS.md).
+
+For all key architectural decisions, see [docs/adr/](docs/adr/).
+
+---
+
+## Key Concepts
+
+### Tenant Isolation
+Every model that uses the `BelongsToTenant` trait is automatically scoped to the authenticated user's tenant. You cannot accidentally query another tenant's data — the scope is enforced at the Eloquent query builder level.
+
+```php
+// This only returns feedback for the current tenant — always
+$feedback = Feedback::where('status', 'open')->get();
+```
+
+### Semantic Search vs Keyword Search
+Traditional search matches exact words. Semantic search matches meaning. A query for `"slow load times"` will surface feedback titled `"App feels sluggish on 3G"` because their vector representations are similar.
+
+### Job Idempotency
+Background jobs use cache-based idempotency keys to prevent duplicate execution. If a job is retried (due to a transient failure), it checks whether it has already completed before doing any work. Keys expire after 24 hours.
+
+### Cost Tracking
+Every OpenAI API call logs token usage and estimated cost. `AiService` aggregates daily usage per tenant in Redis and enforces configurable spending caps before making API calls.
+
+---
+
+## Running Tests
+
+```bash
+# Full test suite (31 tests, 80 assertions)
+php artisan test
+
+# By suite
+php artisan test --testsuite=Feature
+php artisan test --testsuite=Integration
+php artisan test --testsuite=Performance
+```
+
+Tests use a dedicated `feedbackhub_test` database. All external APIs (OpenAI, Pinecone) are mocked — no real API calls are made during testing.
+
+---
+
+## Monitoring
+
+```bash
+# Watch for slow queries (>100ms)
+tail -f storage/logs/laravel.log | grep slow_query
+
+# Watch for job failures
+tail -f storage/logs/laravel.log | grep job_failed
+
+# Watch AI usage
+tail -f storage/logs/laravel.log | grep ai_usage_tracked
+```
+
+```php
+// System health check (via tinker)
+App\Services\MetricsService::getSystemHealth();
+// Returns: health_score, failed_jobs, queue_depth, cache status, db status
+
+// AI usage stats for a tenant (last 7 days)
+app(App\Services\AiService::class)->getUsageStats($tenantId, 7);
+```
+
+---
+
+## Project Structure
+
+```
+app/
+├── Commands/          # CQRS write commands
+├── Events/            # Domain events (FeedbackCreated, FeedbackStatusChanged)
+├── Jobs/              # Background jobs (notifications, embeddings, cleanup)
+├── Listeners/         # Event listeners (notify, embed, cache-clear)
+├── Models/            # Eloquent models with global scopes
+│   ├── Concerns/      # BelongsToTenant trait
+│   └── Scopes/        # TenantScope global scope
+├── Queries/           # CQRS read queries
+├── Repositories/      # Data access layer
+└── Services/          # Business logic and external API integrations
+docs/
+├── adr/               # Architecture Decision Records
+├── ARCHITECTURE.md    # Detailed domain documentation
+├── DIAGRAMS.md        # Mermaid system diagrams
+├── DEPLOYMENT.md      # Production deployment guide
+├── ONBOARDING.md      # Guide for new developers
+└── RUNBOOK.md         # Operational procedures
+```
+
+---
+
+## Further Reading
+
+- [Architecture Decision Records](docs/adr/) — why key decisions were made
+- [System Diagrams](docs/DIAGRAMS.md) — data flow, isolation model, API integrations
+- [Architecture Reference](docs/ARCHITECTURE.md) — full domain documentation
+- [Deployment Guide](docs/DEPLOYMENT.md) — production setup
+- [Runbook](docs/RUNBOOK.md) — operational procedures for on-call
+- [Onboarding Guide](docs/ONBOARDING.md) — how to add features and debug issues

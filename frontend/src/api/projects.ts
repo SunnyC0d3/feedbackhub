@@ -11,7 +11,7 @@ export async function getProject(id: number): Promise<{ data: Project }> {
   return data
 }
 
-export async function summarizeProject(id: number): Promise<{ data: { summary: string; tokens_used: number; cost_usd: number } }> {
-  const { data } = await client.post<{ data: { summary: string; tokens_used: number; cost_usd: number } }>(`/projects/${id}/summarize`)
+export async function summarizeProject(id: number): Promise<{ project_id: number; feedback_count: number; summary: string; usage: { tokens_used: number; cost_usd: number } }> {
+  const { data } = await client.post<{ project_id: number; feedback_count: number; summary: string; usage: { tokens_used: number; cost_usd: number } }>(`/projects/${id}/summarize`)
   return data
 }

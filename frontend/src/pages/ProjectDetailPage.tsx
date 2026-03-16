@@ -36,8 +36,8 @@ export default function ProjectDetailPage() {
   const summarize = useMutation({
     mutationFn: () => summarizeProject(projectId),
     onSuccess: (res) => {
-      setSummary(res.data.summary)
-      setSummaryCost(res.data.cost_usd)
+      setSummary(res.summary)
+      setSummaryCost(res.usage.cost_usd)
     },
   })
 

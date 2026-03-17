@@ -12,7 +12,7 @@ Built with **Laravel 11**, **MySQL**, **Redis**, **OpenAI**, **Pinecone**, and a
 - **Hierarchical organisation** — Tenant → Division → Project → Feedback with role-based access (Admin, Manager, Member, Support)
 - **AI-powered summarization** — GPT-4o-mini generates structured summaries (themes, issues, positives, recommendations) across any feedback set
 - **Semantic search** — query feedback by meaning using OpenAI embeddings + Pinecone vector similarity
-- **Background job processing** — notifications and embeddings processed async via Redis queues with retry and idempotency
+- **Background job processing** — notifications and embeddings processed async via SQS (production) / Redis (local) with retry and idempotency
 - **Usage tracking and cost monitoring** — per-tenant daily AI spend tracked with configurable caps
 - **Structured observability** — JSON logs with request context, slow query detection, business metrics, and system health checks
 
@@ -24,11 +24,13 @@ Built with **Laravel 11**, **MySQL**, **Redis**, **OpenAI**, **Pinecone**, and a
 |-------|-----------|
 | Backend | PHP 8.1, Laravel 11 |
 | Database | MySQL 8.0 |
-| Cache & Queue | Redis |
+| Cache | Redis |
+| Queue | SQS (production) / Redis (local) |
 | AI — Summarization | OpenAI GPT-4o-mini |
 | AI — Embeddings | OpenAI text-embedding-3-small |
 | Vector Database | Pinecone (feedback-embeddings index) |
 | Frontend | React 18, TypeScript, Vite, TanStack Query, Axios, Tailwind CSS |
+| Deployment | AWS (EC2, RDS, SQS, S3, CloudFront, Lambda, ECR) |
 
 ---
 
@@ -36,35 +38,27 @@ Built with **Laravel 11**, **MySQL**, **Redis**, **OpenAI**, **Pinecone**, and a
 
 ### Prerequisites
 
-- PHP 8.1+, Composer
-- Node.js 18+, npm
-- MySQL 8.0 (running on port 3307 by default)
-- Redis
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine + Compose)
+- Node.js 18+, npm (for the frontend dev server only)
 - OpenAI API key
 - Pinecone API key + index
 
-### Backend
+> MySQL and Redis run inside Docker — no local installation needed.
+
+### Backend (Docker)
 
 ```bash
-# Install dependencies
-composer install
-
-# Copy environment file
+# Copy environment file and configure API keys
 cp .env.example .env
+# Set OPENAI_API_KEY and PINECONE_* values in .env
 
-# Generate app key
-php artisan key:generate
+# Start all containers (API, queue worker, MySQL, Redis, nginx)
+docker compose up -d
 
-# Configure your .env (see Environment Variables below)
+# Run migrations and seed test data (first time only)
+docker compose exec web php artisan migrate --seed
 
-# Run migrations and seed test data
-php artisan migrate --seed
-
-# Start the dev server
-php artisan serve
-
-# Start the queue worker (separate terminal)
-php artisan queue:work redis --verbose
+# API is now live at http://localhost:8000
 ```
 
 ### Frontend
@@ -75,18 +69,48 @@ npm install
 npm run dev   # http://localhost:5173 (proxies /api → http://localhost:8000)
 ```
 
+### Useful Docker commands
+
+```bash
+# Stop everything
+docker compose down
+
+# View logs
+docker compose logs -f web
+docker compose logs -f worker
+
+# Run artisan commands
+docker compose exec web php artisan <command>
+
+# Open a shell inside the web container
+docker compose exec web bash
+
+# Reset the database
+docker compose exec web php artisan migrate:fresh --seed
+```
+
+### Connecting a database client (e.g. PhpStorm, TablePlus)
+
+| Field | Value |
+|-------|-------|
+| Host | `127.0.0.1` |
+| Port | `3307` |
+| User | `root` |
+| Password | `secret` |
+| Database | `feedbackhub` |
+
 ### Environment Variables
 
 ```env
-# Database
+# Database — Docker MySQL (127.0.0.1 forces TCP, bypasses local Unix socket)
 DB_CONNECTION=mysql
-DB_HOST=localhost
+DB_HOST=127.0.0.1
 DB_PORT=3307
 DB_DATABASE=feedbackhub
 DB_USERNAME=root
-DB_PASSWORD=
+DB_PASSWORD=secret
 
-# Cache & Queue
+# Cache & Queue (local dev uses Redis queue; production uses SQS)
 CACHE_DRIVER=redis
 QUEUE_CONNECTION=redis
 REDIS_HOST=127.0.0.1
@@ -167,16 +191,16 @@ Every OpenAI API call logs token usage and estimated cost. `AiService` aggregate
 ## Running Tests
 
 ```bash
-# Full test suite (69 tests, 196 assertions)
-php artisan test
+# Full test suite (65 tests, 189 assertions)
+./vendor/bin/phpunit
 
 # By suite
-php artisan test --testsuite=Feature
-php artisan test --testsuite=Integration
-php artisan test --testsuite=Performance
+./vendor/bin/phpunit --testsuite=Feature
+./vendor/bin/phpunit --testsuite=Integration
+./vendor/bin/phpunit --testsuite=Performance
 ```
 
-Tests use a dedicated `feedbackhub_test` database. All external APIs (OpenAI, Pinecone) are mocked — no real API calls are made during testing.
+Tests use a dedicated `feedbackhub_test` database running in Docker MySQL. All external APIs (OpenAI, Pinecone) are mocked — no real API calls are made during testing.
 
 ---
 
@@ -215,9 +239,13 @@ app/
 ├── Models/            # Eloquent models with global scopes
 │   ├── Concerns/      # BelongsToTenant trait
 │   └── Scopes/        # TenantScope global scope
-├── Queries/           # CQRS read queries
 ├── Repositories/      # Data access layer
 └── Services/          # Business logic and external API integrations
+docker/
+├── entrypoint.sh      # Runs artisan optimize on production startup
+├── nginx.conf         # Reverse proxy config (HTTP + commented HTTPS block)
+├── php.ini            # OPcache + memory settings
+└── supervisord.conf   # Runs PHP-FPM inside the web container
 frontend/
 ├── src/
 │   ├── api/           # Axios client + typed API functions (one file per resource)
@@ -231,9 +259,12 @@ docs/
 ├── adr/               # Architecture Decision Records
 ├── API.md             # Full REST API reference
 ├── DIAGRAMS.md        # Mermaid system diagrams
-├── DEPLOYMENT.md      # AWS deployment guide (planned — Month 8)
+├── DEPLOYMENT.md      # AWS deployment guide (EC2 free tier — Month 8)
 ├── ONBOARDING.md      # Guide for new developers
 └── RUNBOOK.md         # Operational procedures
+Dockerfile             # Multi-stage PHP 8.1-fpm production image
+docker-compose.yml     # Local dev: nginx + web + worker + mysql + redis
+docker-compose.prod.yml # Production: nginx + web + worker + redis (RDS external)
 ```
 
 ---
@@ -280,7 +311,6 @@ Full request/response documentation: [docs/API.md](docs/API.md)
 - [API Reference](docs/API.md) — all endpoints, request/response shapes, error codes
 - [Architecture Decision Records](docs/adr/) — why key decisions were made
 - [System Diagrams](docs/DIAGRAMS.md) — data flow, isolation model, API integrations
-- [Architecture Reference](docs/ARCHITECTURE.md) — full domain documentation
 - [Runbook](docs/RUNBOOK.md) — operational procedures for on-call
 - [Onboarding Guide](docs/ONBOARDING.md) — how to add features and debug issues
-- [AWS Deployment Guide](docs/DEPLOYMENT.md) — ECS, RDS, SQS, Lambda, CloudFront, CI/CD
+- [AWS Deployment Guide](docs/DEPLOYMENT.md) — EC2 free tier deployment with Docker, SQS, S3, Lambda, CI/CD

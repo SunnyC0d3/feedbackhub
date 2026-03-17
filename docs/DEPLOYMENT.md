@@ -1,148 +1,165 @@
 # AWS Deployment Guide
 
-This guide deploys FeedbackHub to AWS using Docker, ECS Fargate, RDS, SQS, Lambda, and a GitHub Actions CI/CD pipeline. The goal is a production-grade architecture that showcases a wide range of AWS services.
+This guide deploys FeedbackHub to AWS using Docker and managed services while staying within (or very close to) the AWS Free Tier. The goal is to learn production-grade cloud architecture without a large monthly bill.
+
+Estimated cost: $0–5/month (vs ~$170/month for the full ECS Fargate + ALB + Multi-AZ approach).
+
+---
+
+## Free Tier vs Full Production Comparison
+
+| Concern | This Guide (Free Tier) | Full Production |
+|---------|------------------------|-----------------|
+| Compute | EC2 t2.micro (750 hrs/month free) | ECS Fargate |
+| Reverse proxy | nginx on EC2 + Let's Encrypt | ALB (~$18/month) |
+| Database | RDS db.t3.micro single-AZ (750 hrs/month free) | RDS Multi-AZ (~$70/month) |
+| Cache | Redis in Docker on EC2 | ElastiCache (~$13/month) |
+| Job queue | SQS (1M requests/month free) | SQS (same) |
+| Secrets | SSM Parameter Store (free) | Secrets Manager (~$3/month) |
+| Scheduler | Lambda → SSM Run Command | Lambda → ECS RunTask |
+| Frontend | S3 + CloudFront (free tier) | S3 + CloudFront (same) |
+| CI/CD | GitHub Actions + OIDC + SSM | GitHub Actions + OIDC + ECS |
+| DNS | EC2 public IP or free DNS | Route 53 (~$0.50/month) |
+
+What stays the same and teaches the same skills: SQS, S3, CloudFront, Lambda, EventBridge, ECR, IAM, VPC, CloudWatch, GitHub Actions OIDC.
 
 ---
 
 ## AWS Services Used
 
-| Service | Purpose | Why |
-|---------|---------|-----|
-| **ECR** | Docker image registry | Stores the containerised app; ECS pulls from it |
-| **ECS Fargate** | Serverless containers | Runs API, queue worker, and scheduled task — no EC2 to manage |
-| **RDS MySQL 8.0** | Production database | Managed MySQL with Multi-AZ failover and automated backups |
-| **ElastiCache Redis** | Cache layer | Laravel `CACHE_DRIVER=redis`; Redis handles cache only (not queues) |
-| **SQS** | Job queue | Replaces Redis queues; durable, managed, has dead-letter queue support |
-| **S3** | React frontend hosting | Static build output served via CloudFront |
-| **CloudFront** | CDN for frontend | Global edge caching; handles client-side routing with custom 404→200 rule |
-| **ALB** | Load balancer | Routes HTTPS traffic to ECS API tasks; terminates TLS |
-| **Lambda** | Serverless function | Triggers `php artisan schedule:run` every minute via EventBridge |
-| **EventBridge Scheduler** | Cron trigger | Fires Lambda every minute to run scheduled tasks |
-| **Secrets Manager** | Environment variables | All `.env` secrets injected into ECS tasks at runtime — no secrets in images |
-| **ACM** | SSL certificates | Free, auto-renewing HTTPS certificate attached to ALB and CloudFront |
-| **Route 53** | DNS | `api.yourdomain.com` → ALB; `app.yourdomain.com` → CloudFront |
-| **IAM** | Roles and policies | Least-privilege roles for ECS, Lambda, and GitHub Actions |
-| **VPC** | Network isolation | Public subnets for ALB; private subnets for ECS, RDS, ElastiCache |
-| **CloudWatch** | Logs, metrics, alarms | Structured log ingestion, metric filters on app events, threshold alarms |
-| **GitHub Actions + OIDC** | CI/CD | Tests → build → push → deploy; no long-lived AWS keys |
+| Service | Purpose | Free Tier |
+|---------|---------|-----------|
+| **ECR** | Docker image registry | 500 MB/month free |
+| **EC2 t2.micro** | Runs the Laravel API, queue worker, Redis (all via Docker) | 750 hrs/month free (12 months) |
+| **RDS MySQL 8.0 db.t3.micro** | Managed database with automated backups | 750 hrs/month + 20 GB free (12 months) |
+| **SQS** | Job queue — durable, managed, Dead Letter Queue support | 1M requests/month free |
+| **S3** | React frontend static hosting | 5 GB + 20K GET/month free |
+| **CloudFront** | CDN for the React frontend | 1 TB transfer + 10M requests/month free |
+| **Lambda** | Triggers `php artisan schedule:run` every minute | 1M invocations/month free |
+| **EventBridge Scheduler** | Fires Lambda every minute | Always free |
+| **SSM Parameter Store** | Stores all `.env` secrets — fetched at runtime | Standard parameters are free |
+| **SSM Run Command** | CI/CD deployments and scheduler — no SSH keys needed | Always free |
+| **ACM** | Free SSL certificate | Always free |
+| **IAM** | Least-privilege roles for EC2, Lambda, GitHub Actions | Always free |
+| **VPC** | Network isolation — public subnet for EC2, private for RDS | Always free |
+| **CloudWatch** | Logs from EC2 via CloudWatch agent | 5 GB ingestion/month free |
+| **GitHub Actions + OIDC** | CI/CD — no long-lived AWS keys stored | Free for public repos |
 
 ---
 
-## Architecture Diagram
+## Architecture
 
 ```
 Internet
-  └── Route 53
-        ├── api.yourdomain.com  ──→  ALB  ──→  ECS Fargate: feedbackhub-web (2 tasks)
-        └── app.yourdomain.com  ──→  CloudFront  ──→  S3 (React build)
+  └── EC2 t2.micro (public subnet)
+        ├── nginx (port 80/443)
+        │     ├── HTTP → HTTPS redirect
+        │     └── proxy_pass → PHP-FPM:9000
+        ├── PHP-FPM container  (feedbackhub-web)
+        ├── Queue worker container  (feedbackhub-worker: queue:work sqs)
+        └── Redis container  (cache only — no persistence needed)
 
-VPC (10.0.0.0/16)
-  ├── Public Subnets (AZ-a 10.0.1.0/24, AZ-b 10.0.2.0/24)
-  │     ├── ALB (internet-facing)
-  │     └── NAT Gateway (outbound for OpenAI / Pinecone calls)
-  │
-  └── Private Subnets (AZ-a 10.0.3.0/24, AZ-b 10.0.4.0/24)
-        ├── ECS Fargate: feedbackhub-web      (Nginx + PHP-FPM, autoscales 1–10)
-        ├── ECS Fargate: feedbackhub-worker   (queue:work sqs, autoscales 1–5)
-        ├── RDS MySQL 8.0 (Multi-AZ, db.t3.medium)
-        └── ElastiCache Redis 7 (cache.t3.micro, cache-only)
+Private Subnet
+  └── RDS MySQL 8.0 db.t3.micro (single-AZ, automated backups)
 
 Serverless
   └── EventBridge Scheduler (every 1 min)
-        └── Lambda: feedbackhub-scheduler-trigger (Python, ~20 lines)
-              └── ECS RunTask: feedbackhub-scheduler
-                    └── runs: php artisan schedule:run  →  exits
+        └── Lambda: feedbackhub-scheduler-trigger
+              └── SSM Run Command → EC2: docker exec feedbackhub-web php artisan schedule:run
+
+Static
+  └── CloudFront distribution
+        └── S3 bucket (React frontend build)
 
 CI/CD
   └── GitHub Actions (push to master)
-        ├── Run PHPUnit tests (MySQL service container)
+        ├── Run PHPUnit tests
         ├── TypeScript typecheck + React build
         ├── Build Docker image → push to ECR
-        ├── Update ECS task definition + force new deployment
+        ├── SSM Run Command → EC2: docker pull + restart containers
         ├── Sync frontend/dist/ → S3
-        └── CloudFront cache invalidation
+        └── CloudFront invalidation
 
 Secrets
-  └── AWS Secrets Manager → injected into ECS task environment at runtime
+  └── SSM Parameter Store → fetched by EC2 at container startup
 
 Observability
-  └── CloudWatch Logs (all ECS + Lambda log groups, 30-day retention)
-  └── CloudWatch Metric Filters (job_failed, slow_query, api_error events)
-  └── CloudWatch Alarms → SNS → email alerts
-  └── CloudWatch Container Insights (per-task CPU/memory/network)
+  └── CloudWatch Logs (CloudWatch agent on EC2 ships Docker logs)
 ```
 
 ---
 
 ## Key Architecture Decisions
 
-### SQS replaces Redis for queues
-In production, ElastiCache has no persistence by default. If the Redis node restarts, queued jobs are lost. SQS is 11-nines durable, has Dead Letter Queue support, and integrates natively with Laravel's SQS driver. Redis is kept for `CACHE_DRIVER=redis` only.
+### EC2 + Docker instead of ECS Fargate
+ECS Fargate is not in the free tier (~$15–30/month for even one task). A single EC2 t2.micro running Docker Compose handles the API, queue worker, and Redis container comfortably under low traffic. The Docker image, Dockerfile, and CI/CD pipeline are identical — migrating to Fargate later requires only ECS task definition changes.
 
-### Three ECS task types, one Docker image
-The same image runs as three different ECS services by overriding the `CMD`:
-- **Web**: `php-fpm` behind Nginx on port 80 (ALB target)
-- **Worker**: `php artisan queue:work sqs --sleep=3 --tries=3 --max-time=3600`
-- **Scheduler**: `php artisan schedule:run` (runs once and exits — triggered by Lambda)
+### SQS for queues (not Redis)
+Redis on the EC2 instance has no persistence. If the instance restarts, queued jobs are lost. SQS is 11-nines durable, has Dead Letter Queue support, and costs nothing under 1M requests/month. Redis is kept as a cache-only service running in Docker on EC2.
 
-### Lambda as scheduler trigger
-EventBridge Scheduler fires Lambda every minute. Lambda calls `ecs:RunTask` to launch a short-lived scheduler task, waits for it to complete, and logs the result. This replaces the `* * * * * php artisan schedule:run` cron with a proper serverless + container pattern.
+### SSM Parameter Store instead of Secrets Manager
+Secrets Manager charges $0.40 per secret per month (~$3/month for this app). SSM Parameter Store standard parameters are free and work identically: secrets are stored encrypted, fetched at container startup, and never baked into the Docker image.
 
-### GitHub Actions OIDC — no long-lived AWS keys
-GitHub Actions uses OIDC federation to assume an IAM role. No `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` secrets are stored in GitHub. The IAM role trust policy restricts to `repo:your-org/feedback-hub:ref:refs/heads/master` only.
+### SSM Run Command for deployments
+Instead of SSH (which requires storing a private key in GitHub Secrets), GitHub Actions assumes an IAM role via OIDC and uses SSM Run Command to execute deployment commands on the EC2 instance. No long-lived credentials stored anywhere.
+
+### Lambda → SSM Run Command for scheduler
+EventBridge fires Lambda every minute. Lambda calls `ssm:SendCommand` to run `docker exec feedbackhub-web php artisan schedule:run` on the EC2 instance and logs the result. Same pattern as the Fargate approach, different target.
+
+### nginx + Let's Encrypt for HTTPS
+ALB costs ~$18/month. nginx runs in Docker on EC2 with Certbot obtaining a free Let's Encrypt certificate. ACM is used for the CloudFront distribution (React frontend), which is always free.
 
 ---
 
-## File Structure Created in This Step
+## File Structure
 
 ```
 feedback-hub/
-├── Dockerfile                                    # Multi-stage PHP 8.1 build
-├── .dockerignore                                 # Excludes node_modules, vendor, .env, tests
+├── Dockerfile                                    # ✅ Multi-stage PHP 8.1-fpm build
+├── .dockerignore                                 # ✅ Excludes node_modules, vendor, .env, tests
 ├── docker/
-│   ├── nginx.conf                                # API proxy: forwards all traffic to PHP-FPM
-│   ├── supervisord.conf                          # Runs Nginx + PHP-FPM together in web container
-│   └── php.ini                                   # OPcache settings for production
-├── docker-compose.yml                            # Local development only (not used in AWS)
+│   ├── entrypoint.sh                             # ✅ Runs artisan optimize on production startup
+│   ├── nginx.conf                                # ✅ Reverse proxy to PHP-FPM (HTTPS block commented)
+│   ├── supervisord.conf                          # ✅ Runs PHP-FPM in web container
+│   └── php.ini                                   # ✅ OPcache settings for production
+├── docker-compose.yml                            # ✅ Local development (redis queue, mysql container)
+├── docker-compose.prod.yml                       # ✅ Production: web + worker + redis (RDS external)
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml                            # CI/CD pipeline
+│       └── deploy.yml                            # ⏳ CI/CD pipeline
 └── infrastructure/
     ├── terraform/
-    │   ├── main.tf                               # Provider, backend (S3 state)
-    │   ├── variables.tf                          # All configurable values
-    │   ├── outputs.tf                            # ALB DNS, CloudFront URL, ECR URL
-    │   ├── vpc.tf                                # VPC, subnets, IGW, NAT, route tables
-    │   ├── security_groups.tf                    # sg-alb, sg-ecs, sg-rds, sg-redis
-    │   ├── ecr.tf                                # ECR repository + lifecycle policy
-    │   ├── ecs.tf                                # Cluster, task definitions, services, autoscaling
-    │   ├── rds.tf                                # MySQL 8.0 Multi-AZ instance
-    │   ├── elasticache.tf                        # Redis cache cluster
-    │   ├── sqs.tf                                # Main queue + DLQ with redrive policy
-    │   ├── alb.tf                                # ALB, listeners, target group
-    │   ├── s3.tf                                 # Frontend bucket + ALB access logs bucket
-    │   ├── cloudfront.tf                         # Distribution with OAC, SPA routing
-    │   ├── acm.tf                                # SSL certificates (ALB + CloudFront)
-    │   ├── route53.tf                            # DNS records for api + app subdomains
-    │   ├── iam.tf                                # All roles: ECS exec, task, Lambda, GitHub OIDC
-    │   ├── secrets.tf                            # Secrets Manager secret resources (no values)
-    │   ├── lambda.tf                             # Scheduler trigger function + EventBridge rule
-    │   └── cloudwatch.tf                         # Log groups, metric filters, alarms, dashboard
+    │   ├── main.tf                               # ⏳ Provider, backend (S3 state)
+    │   ├── variables.tf                          # ⏳
+    │   ├── outputs.tf                            # ⏳
+    │   ├── vpc.tf                                # ⏳ VPC, subnets, IGW, route tables
+    │   ├── security_groups.tf                    # ⏳ sg-ec2 (80,443,22 inbound), sg-rds
+    │   ├── ecr.tf                                # ⏳ ECR repository + lifecycle policy
+    │   ├── ec2.tf                                # ⏳ t2.micro instance, IAM instance profile
+    │   ├── rds.tf                                # ⏳ MySQL 8.0 db.t3.micro, single-AZ
+    │   ├── sqs.tf                                # ⏳ Main queue + DLQ
+    │   ├── s3.tf                                 # ⏳ Frontend bucket
+    │   ├── cloudfront.tf                         # ⏳ Distribution with OAC, SPA routing
+    │   ├── acm.tf                                # ⏳ SSL cert for CloudFront
+    │   ├── ssm.tf                                # ⏳ Parameter Store secret placeholders
+    │   ├── iam.tf                                # ⏳ EC2 instance role, Lambda role, GitHub OIDC role
+    │   ├── lambda.tf                             # ⏳ Scheduler trigger function + EventBridge rule
+    │   └── cloudwatch.tf                         # ⏳ Log groups, metric filters, alarms
     └── lambda/
         └── scheduler_trigger/
-            └── handler.py                        # boto3 ECS RunTask call (~25 lines)
+            └── handler.py                        # ⏳ boto3 SSM SendCommand (~25 lines)
 ```
 
 ---
 
 ## Prerequisites
 
-- AWS account with admin access
+- AWS account (12-month free tier active or costs will be minimal)
 - AWS CLI v2 installed and configured (`aws configure`)
 - Terraform 1.6+ installed
 - Docker installed and running
-- A registered domain in Route 53 (or you can use the ALB/CloudFront URLs directly)
 - GitHub repository for the project
+- A domain name (optional — you can use the EC2 public IP directly for learning)
 
 ---
 
@@ -150,16 +167,14 @@ feedback-hub/
 
 ### Step 1 — Bootstrap Terraform State
 
-Terraform needs an S3 bucket to store state and a DynamoDB table for state locking. Create these manually once:
+Create an S3 bucket and DynamoDB table for Terraform state (one-time setup):
 
 ```bash
-# Create state bucket (choose a unique name)
 aws s3 mb s3://feedbackhub-terraform-state --region us-east-1
 aws s3api put-bucket-versioning \
   --bucket feedbackhub-terraform-state \
   --versioning-configuration Status=Enabled
 
-# Create DynamoDB lock table
 aws dynamodb create-table \
   --table-name feedbackhub-terraform-locks \
   --attribute-definitions AttributeName=LockID,AttributeType=S \
@@ -178,124 +193,112 @@ cp terraform.tfvars.example terraform.tfvars
 Edit `terraform.tfvars`:
 
 ```hcl
-aws_region     = "us-east-1"
-domain_name    = "yourdomain.com"
-db_password    = "STRONG_PASSWORD_HERE"
-app_name       = "feedbackhub"
-environment    = "prod"
+aws_region   = "us-east-1"
+app_name     = "feedbackhub"
+environment  = "prod"
+db_password  = "STRONG_PASSWORD_HERE"
+domain_name  = ""   # Leave empty to use EC2 public IP
 ```
 
 ### Step 3 — Provision Infrastructure
 
 ```bash
 cd infrastructure/terraform
-
 terraform init
-terraform plan    # Review — ~50 resources
-terraform apply   # Takes 15–20 min (RDS Multi-AZ is slow to provision)
+terraform plan    # Review — ~30 resources
+terraform apply   # Takes 10–15 min (RDS is the slow part)
 ```
 
 After apply, note the outputs:
+
 ```
-alb_dns_name       = "feedbackhub-alb-XXXX.us-east-1.elb.amazonaws.com"
-cloudfront_url     = "dXXXXXXXXXXXX.cloudfront.net"
+ec2_public_ip      = "54.123.45.67"
 ecr_repository_url = "123456789.dkr.ecr.us-east-1.amazonaws.com/feedbackhub/app"
 rds_endpoint       = "feedbackhub-prod.XXXX.us-east-1.rds.amazonaws.com"
-redis_endpoint     = "feedbackhub-prod.XXXX.cache.amazonaws.com"
 sqs_queue_url      = "https://sqs.us-east-1.amazonaws.com/123456789/feedbackhub-jobs"
+cloudfront_url     = "dXXXXXXXXXXXX.cloudfront.net"
+s3_frontend_bucket = "feedbackhub-frontend-prod"
 ```
 
-### Step 4 — Store Secrets
+### Step 4 — Store Secrets in SSM Parameter Store
 
 ```bash
-# App secrets
-aws secretsmanager create-secret \
-  --name "feedbackhub/prod/app" \
-  --secret-string '{
-    "APP_KEY": "base64:...",
-    "APP_ENV": "production",
-    "APP_DEBUG": "false",
-    "APP_URL": "https://api.yourdomain.com"
-  }'
+# Application
+aws ssm put-parameter --name "/feedbackhub/prod/APP_KEY"   --value "base64:..." --type SecureString
+aws ssm put-parameter --name "/feedbackhub/prod/APP_ENV"   --value "production" --type String
+aws ssm put-parameter --name "/feedbackhub/prod/APP_DEBUG" --value "false"      --type String
+aws ssm put-parameter --name "/feedbackhub/prod/APP_URL"   --value "https://api.yourdomain.com" --type String
 
 # Database
-aws secretsmanager create-secret \
-  --name "feedbackhub/prod/db" \
-  --secret-string '{
-    "DB_HOST": "<rds_endpoint>",
-    "DB_DATABASE": "feedbackhub",
-    "DB_USERNAME": "feedbackhub",
-    "DB_PASSWORD": "<your_password>"
-  }'
+aws ssm put-parameter --name "/feedbackhub/prod/DB_HOST"     --value "<rds_endpoint>" --type SecureString
+aws ssm put-parameter --name "/feedbackhub/prod/DB_DATABASE" --value "feedbackhub"    --type String
+aws ssm put-parameter --name "/feedbackhub/prod/DB_USERNAME" --value "feedbackhub"    --type String
+aws ssm put-parameter --name "/feedbackhub/prod/DB_PASSWORD" --value "<your_password>" --type SecureString
 
-# Redis
-aws secretsmanager create-secret \
-  --name "feedbackhub/prod/redis" \
-  --secret-string '{
-    "REDIS_HOST": "<redis_endpoint>",
-    "REDIS_PORT": "6379"
-  }'
+# Redis (local Docker container on same EC2)
+aws ssm put-parameter --name "/feedbackhub/prod/REDIS_HOST" --value "redis" --type String
+aws ssm put-parameter --name "/feedbackhub/prod/REDIS_PORT" --value "6379"  --type String
 
 # SQS
-aws secretsmanager create-secret \
-  --name "feedbackhub/prod/sqs" \
-  --secret-string '{
-    "SQS_PREFIX": "https://sqs.us-east-1.amazonaws.com/123456789",
-    "SQS_QUEUE": "feedbackhub-jobs",
-    "AWS_DEFAULT_REGION": "us-east-1"
-  }'
+aws ssm put-parameter --name "/feedbackhub/prod/SQS_PREFIX" --value "https://sqs.us-east-1.amazonaws.com/123456789" --type String
+aws ssm put-parameter --name "/feedbackhub/prod/SQS_QUEUE"  --value "feedbackhub-jobs" --type String
+aws ssm put-parameter --name "/feedbackhub/prod/AWS_DEFAULT_REGION" --value "us-east-1" --type String
 
 # AI keys
-aws secretsmanager create-secret \
-  --name "feedbackhub/prod/ai" \
-  --secret-string '{
-    "OPENAI_API_KEY": "sk-proj-...",
-    "PINECONE_API_KEY": "...",
-    "PINECONE_HOST": "feedback-embeddings-XXXX.svc.pinecone.io",
-    "PINECONE_ENVIRONMENT": "us-east-1-aws",
-    "PINECONE_INDEX": "feedback-embeddings"
-  }'
+aws ssm put-parameter --name "/feedbackhub/prod/OPENAI_API_KEY"        --value "sk-proj-..." --type SecureString
+aws ssm put-parameter --name "/feedbackhub/prod/PINECONE_API_KEY"      --value "..."         --type SecureString
+aws ssm put-parameter --name "/feedbackhub/prod/PINECONE_HOST"         --value "feedback-embeddings-XXXX.svc.pinecone.io" --type SecureString
+aws ssm put-parameter --name "/feedbackhub/prod/PINECONE_ENVIRONMENT"  --value "us-east-1-aws" --type String
+aws ssm put-parameter --name "/feedbackhub/prod/PINECONE_INDEX"        --value "feedback-embeddings" --type String
 ```
 
-### Step 5 — Run Database Migrations
+### Step 5 — Initial EC2 Bootstrap
 
-The ECS tasks are now running but the database is empty. Run migrations as a one-off ECS task:
+SSH in (or use SSM Session Manager) and set up the instance:
 
 ```bash
-aws ecs run-task \
-  --cluster feedbackhub-prod \
-  --task-definition feedbackhub-app \
-  --launch-type FARGATE \
-  --network-configuration "awsvpcConfiguration={subnets=[subnet-PRIVATE-A],securityGroups=[sg-ecs-web],assignPublicIp=DISABLED}" \
-  --overrides '{"containerOverrides":[{"name":"app","command":["php","artisan","migrate","--force"]}]}'
+# Via SSM Session Manager (no SSH key required)
+aws ssm start-session --target <instance-id>
 
-# Optionally seed initial data
-aws ecs run-task \
-  --cluster feedbackhub-prod \
-  --task-definition feedbackhub-app \
-  --launch-type FARGATE \
-  --network-configuration "awsvpcConfiguration={subnets=[subnet-PRIVATE-A],securityGroups=[sg-ecs-web],assignPublicIp=DISABLED}" \
-  --overrides '{"containerOverrides":[{"name":"app","command":["php","artisan","db:seed","--force"]}]}'
+# On the EC2 instance:
+# Install Docker, Docker Compose, AWS CLI, CloudWatch agent
+# (EC2 user-data script handles this automatically via Terraform)
 ```
 
-### Step 6 — Configure GitHub Actions
+### Step 6 — Run Database Migrations
 
-Set these repository secrets in GitHub (Settings → Secrets → Actions):
+```bash
+# Via SSM Run Command
+aws ssm send-command \
+  --instance-ids <instance-id> \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["docker exec feedbackhub-web php artisan migrate --force"]' \
+  --output text
+
+# Optionally seed initial data
+aws ssm send-command \
+  --instance-ids <instance-id> \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["docker exec feedbackhub-web php artisan db:seed --force"]' \
+  --output text
+```
+
+### Step 7 — Configure GitHub Actions
+
+Set these repository secrets (Settings → Secrets → Actions):
 
 | Secret | Value |
 |--------|-------|
 | `AWS_ACCOUNT_ID` | Your 12-digit AWS account ID |
 | `AWS_REGION` | `us-east-1` |
 | `ECR_REPOSITORY` | `feedbackhub/app` |
-| `ECS_CLUSTER` | `feedbackhub-prod` |
-| `ECS_SERVICE_WEB` | `feedbackhub-web` |
-| `ECS_SERVICE_WORKER` | `feedbackhub-worker` |
+| `EC2_INSTANCE_ID` | From Terraform output |
 | `S3_FRONTEND_BUCKET` | `feedbackhub-frontend-prod` |
 | `CLOUDFRONT_DISTRIBUTION_ID` | From Terraform output |
 
-The `AWS_ROLE_TO_ASSUME` ARN is also output by Terraform.
+The `AWS_ROLE_TO_ASSUME` ARN is output by Terraform (OIDC — no stored keys).
 
-### Step 7 — First Deployment
+### Step 8 — First Deployment
 
 ```bash
 git push origin master
@@ -304,39 +307,36 @@ git push origin master
 GitHub Actions will:
 1. Run all 69 PHPUnit tests
 2. Run `npm run typecheck` + `npm run build`
-3. Build the Docker image, push to ECR
-4. Register a new ECS task definition revision with the new image
-5. Force new deployments on web and worker services (rolling update)
-6. Wait for both services to stabilise
-7. Sync the React build to S3
-8. Invalidate CloudFront cache
+3. Build the Docker image and push to ECR (tagged `:latest` + `:<git-sha>`)
+4. Use SSM Run Command to pull the new image and restart containers on EC2
+5. Sync the React build to S3
+6. Invalidate the CloudFront cache
 
-First deployment takes ~8–10 minutes. Subsequent deployments: ~4–5 minutes.
-
-### Step 8 — Verify
+### Step 9 — Verify
 
 ```bash
-# Check ECS services are ACTIVE with desired task count
-aws ecs describe-services \
-  --cluster feedbackhub-prod \
-  --services feedbackhub-web feedbackhub-worker \
-  --query 'services[*].{name:serviceName,running:runningCount,desired:desiredCount}'
+# Check containers are running on EC2
+aws ssm send-command \
+  --instance-ids <instance-id> \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["docker ps"]'
 
-# Hit the API
+# Hit the API (replace with your EC2 public IP or domain)
 curl https://api.yourdomain.com/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"tenant_slug":"compass-group","email":"alice@compass.com","password":"password"}'
 
-# Check queue worker is processing jobs
-aws logs tail /ecs/feedbackhub-worker --since 5m
+# Tail logs via CloudWatch
+aws logs tail /ec2/feedbackhub-web    --follow
+aws logs tail /ec2/feedbackhub-worker --follow
 
 # Verify Lambda scheduler fires
-aws logs tail /lambda/feedbackhub-scheduler-trigger --since 5m
+aws logs tail /lambda/feedbackhub-scheduler-trigger --follow
 ```
 
 ---
 
-## CI/CD Pipeline Explained
+## CI/CD Pipeline
 
 ```
 push to master
@@ -348,7 +348,7 @@ push to master
       │
       ├── Job: build-frontend (parallel with test-backend)
       │     ├── npm ci
-      │     ├── npm run typecheck  (zero TS errors required)
+      │     ├── npm run typecheck  (zero TS errors)
       │     ├── npm run build
       │     └── Upload frontend/dist/ as artifact
       │
@@ -357,33 +357,15 @@ push to master
             ├── Login to ECR
             ├── Build Docker image → tag :latest + :<git-sha>
             ├── Push both tags to ECR
-            ├── Update task definition JSON with new image URI
-            ├── Register new task definition revision
-            ├── Force new deployment: feedbackhub-web
-            ├── Force new deployment: feedbackhub-worker
-            ├── Wait for services to stabilise (aws ecs wait)
+            ├── SSM Run Command → EC2:
+            │     docker pull <ecr-image>
+            │     docker compose -f docker-compose.prod.yml up -d
             ├── Download frontend artifact
-            ├── aws s3 sync frontend/dist/ → S3 (--delete removes stale files)
-            └── CloudFront invalidation  (/* path)
+            ├── aws s3 sync frontend/dist/ → S3 (--delete)
+            └── CloudFront invalidation (/* path)
 ```
 
-**Zero-downtime rolling deployments:** ECS keeps old tasks running until new tasks pass health checks. The ALB routes traffic to new tasks as they become healthy.
-
----
-
-## Auto-Scaling
-
-### API (feedbackhub-web)
-- **Metric:** ALB `RequestCountPerTarget`
-- **Scale out:** > 300 requests per target for 2 minutes → add 1 task
-- **Scale in:** < 100 requests per target for 5 minutes → remove 1 task
-- **Min:** 1 task, **Max:** 10 tasks
-
-### Queue Worker (feedbackhub-worker)
-- **Metric:** SQS `ApproximateNumberOfMessagesVisible`
-- **Scale out:** > 100 messages in queue → add 1 worker task
-- **Scale in:** < 10 messages for 5 minutes → remove 1 task
-- **Min:** 1 task, **Max:** 5 tasks
+**Zero-downtime deployments:** `docker compose up -d` starts new containers before stopping old ones. Brief overlap during container swap — acceptable for a learning project. For strict zero-downtime, health-check the new container before stopping the old one.
 
 ---
 
@@ -393,12 +375,11 @@ push to master
 
 | Alarm | Condition | Why it matters |
 |-------|-----------|----------------|
-| ECS Web CPU High | > 70% for 5 min | API is under load |
+| EC2 CPU High | > 80% for 5 min | Instance under load |
 | RDS CPU High | > 80% for 5 min | Database bottleneck |
-| RDS Storage Low | < 5 GB free | Disk will fill |
+| RDS Storage Low | < 5 GB free | Disk will fill (20 GB free tier limit) |
 | DLQ Messages | > 0 at any time | A job failed 3 times and was abandoned |
 | Lambda Errors | > 2 in 5 min | Scheduled tasks stopped running |
-| Job Failures | > 10 in 1 hour | Systemic job failure (metric filter on logs) |
 
 ### Log Insights Queries
 
@@ -425,18 +406,13 @@ fields @timestamp, cost_usd, tokens_used, tenant_id
 
 ```bash
 # API logs (live tail)
-aws logs tail /ecs/feedbackhub-web --follow
+aws logs tail /ec2/feedbackhub-web --follow
 
 # Queue worker logs
-aws logs tail /ecs/feedbackhub-worker --follow
+aws logs tail /ec2/feedbackhub-worker --follow
 
 # Lambda scheduler
 aws logs tail /lambda/feedbackhub-scheduler-trigger --follow
-
-# Failed jobs (all time)
-aws logs filter-log-events \
-  --log-group-name /ecs/feedbackhub-worker \
-  --filter-pattern '{ $.event = "job_failed" }'
 ```
 
 ---
@@ -446,75 +422,72 @@ aws logs filter-log-events \
 ### Application rollback (previous Docker image)
 
 ```bash
-# List recent ECR image tags
-aws ecr list-images \
-  --repository-name feedbackhub/app \
-  --query 'imageIds[?imageTag!=`latest`]' \
-  --output table
-
-# Roll back to a specific git SHA tag
 PREVIOUS_SHA=abc1234
 
-NEW_TASK_DEF=$(aws ecs describe-task-definition \
-  --task-definition feedbackhub-app \
-  --query 'taskDefinition' \
-  | jq --arg img "123456789.dkr.ecr.us-east-1.amazonaws.com/feedbackhub/app:$PREVIOUS_SHA" \
-       '.containerDefinitions[0].image = $img | del(.taskDefinitionArn,.revision,.status,.registeredAt,.registeredBy,.requiresAttributes,.compatibilities)')
-
-aws ecs register-task-definition --cli-input-json "$NEW_TASK_DEF"
-
-aws ecs update-service \
-  --cluster feedbackhub-prod \
-  --service feedbackhub-web \
-  --task-definition feedbackhub-app
+aws ssm send-command \
+  --instance-ids <instance-id> \
+  --document-name "AWS-RunShellScript" \
+  --parameters "commands=[
+    \"docker pull 123456789.dkr.ecr.us-east-1.amazonaws.com/feedbackhub/app:$PREVIOUS_SHA\",
+    \"IMAGE_TAG=$PREVIOUS_SHA docker compose -f docker-compose.prod.yml up -d\"
+  ]"
 ```
 
 ### Database rollback
 
 ```bash
-# Laravel migration rollback (run as a one-off ECS task)
-aws ecs run-task \
-  --cluster feedbackhub-prod \
-  --task-definition feedbackhub-app \
-  --launch-type FARGATE \
-  --network-configuration "awsvpcConfiguration={subnets=[subnet-PRIVATE-A],securityGroups=[sg-ecs-web],assignPublicIp=DISABLED}" \
-  --overrides '{"containerOverrides":[{"name":"app","command":["php","artisan","migrate:rollback"]}]}'
+aws ssm send-command \
+  --instance-ids <instance-id> \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["docker exec feedbackhub-web php artisan migrate:rollback"]'
 ```
 
 ---
 
-## Cost Estimate (us-east-1, lightly loaded)
+## Cost Estimate
 
-| Service | Configuration | Monthly Cost (est.) |
-|---------|--------------|---------------------|
-| ECS Fargate — web | 1 task × 0.5 vCPU, 1 GB, 730 hrs | ~$15 |
-| ECS Fargate — worker | 1 task × 0.25 vCPU, 0.5 GB, 730 hrs | ~$7 |
-| RDS MySQL | db.t3.medium Multi-AZ | ~$70 |
-| ElastiCache Redis | cache.t3.micro | ~$12 |
-| SQS | < 1M requests/month | < $1 |
-| S3 | < 1 GB storage | < $1 |
-| CloudFront | < 10 GB transfer | < $1 |
-| ALB | 1 ALB, light traffic | ~$20 |
-| NAT Gateway | 1 gateway, < 1 GB data | ~$35 |
-| Lambda + EventBridge | < 50K invocations/month | < $1 |
-| CloudWatch | Logs + Container Insights | ~$5 |
-| Secrets Manager | 5 secrets | ~$3 |
-| **Total** | | **~$170/month** |
+| Service | Configuration | Monthly Cost |
+|---------|--------------|--------------|
+| EC2 t2.micro | 730 hrs/month | **Free** (free tier) |
+| RDS db.t3.micro | Single-AZ, 20 GB | **Free** (free tier) |
+| SQS | < 1M requests | **Free** |
+| S3 | < 5 GB | **Free** |
+| CloudFront | < 1 TB transfer | **Free** |
+| Lambda + EventBridge | < 1M invocations | **Free** |
+| ECR | < 500 MB | **Free** |
+| CloudWatch | < 5 GB logs | **Free** |
+| SSM Parameter Store | Standard params | **Free** |
+| **Total (within free tier)** | | **~$0/month** |
 
-> To reduce cost during learning: use `db.t3.micro` RDS (no Multi-AZ) and `cache.t3.micro` → drops to ~$80/month. The NAT Gateway ($35) can also be replaced with a NAT instance on a `t3.micro` spot instance (~$5/month).
+> After the 12-month free tier expires: EC2 t2.micro ~$8/month + RDS db.t3.micro ~$15/month = ~$23/month total. Still very cheap.
+
+---
+
+## Migrating to Full Production (When Ready)
+
+The learning value here is in understanding the architecture. When you're ready to move to ECS Fargate + ALB:
+
+1. **Docker image is identical** — no changes needed
+2. **ECS task definition** — the same `CMD` override pattern (web/worker/scheduler)
+3. **ALB** replaces nginx on EC2
+4. **ECS Fargate** replaces the Docker Compose deployment
+5. **ElastiCache** replaces Redis-in-Docker
+6. **Secrets Manager** replaces SSM Parameter Store
+7. **RDS Multi-AZ** replaces single-AZ
+
+The CI/CD pipeline changes from `SSM Run Command` to `aws ecs update-service --force-new-deployment`. Everything else stays the same.
 
 ---
 
 ## Security Checklist
 
-- [ ] `APP_DEBUG=false` in production Secrets Manager secret
-- [ ] All ECS tasks in private subnets (no public IP assignment)
-- [ ] RDS has no public accessibility
-- [ ] Secrets Manager secrets are encrypted with CMK (or AWS-managed key)
+- [ ] `APP_DEBUG=false` in SSM Parameter Store
+- [ ] EC2 security group allows 80/443 inbound, 22 only from your IP (or blocked entirely — use SSM Session Manager)
+- [ ] RDS security group allows inbound only from EC2 security group (not public)
+- [ ] SSM parameters use `SecureString` for all sensitive values
 - [ ] S3 frontend bucket has all public access blocked (CloudFront OAC only)
-- [ ] ALB has HTTP→HTTPS redirect rule on port 80
+- [ ] nginx enforces HTTP → HTTPS redirect
 - [ ] IAM roles follow least-privilege (no `*` resource policies)
-- [ ] GitHub Actions uses OIDC — no long-lived access keys in repository
+- [ ] GitHub Actions uses OIDC — no long-lived access keys stored
 - [ ] ECR image scanning enabled on push
-- [ ] CloudWatch alarms configured for DLQ, job failures, and CPU spikes
-- [ ] CloudTrail enabled for audit logging (recommended addition)
+- [ ] CloudWatch alarms configured for DLQ and CPU spikes

@@ -3,8 +3,8 @@
 Operational procedures for diagnosing and resolving production issues.
 
 **Audience:** Developers on-call or responding to an incident.
-**Assumption (local/staging):** You have shell access and can run `php artisan` commands.
-**Assumption (production/AWS):** You have AWS CLI access and can exec into ECS tasks or tail CloudWatch logs. See `docs/DEPLOYMENT.md` for the production architecture. Key difference: production uses **SQS for queues** and **ElastiCache Redis for cache only** — Redis going down does not affect job processing in production.
+**Assumption (local/staging):** Docker is running (`docker compose up -d`). All artisan commands run inside the web container via `docker compose exec web php artisan <cmd>`.
+**Assumption (production/AWS):** You have AWS CLI access and can use SSM Run Command to exec into the EC2 instance or tail CloudWatch logs. See `docs/DEPLOYMENT.md` for the production architecture. Key difference: production uses **SQS for queues** and **Redis-in-Docker for cache only** — Redis going down does not affect job processing in production.
 
 ---
 
@@ -43,8 +43,15 @@ php artisan tinker
 | `database` | `"healthy"` | — | `"unhealthy"` |
 
 **Check logs for recent errors:**
+
+Local:
 ```bash
 tail -100 storage/logs/laravel.log | grep -E "ERROR|CRITICAL"
+```
+
+Production (CloudWatch):
+```bash
+aws logs tail /ec2/feedbackhub-web --since 30m | grep -E "ERROR|CRITICAL"
 ```
 
 ---
@@ -60,27 +67,27 @@ tail -100 storage/logs/laravel.log | grep -E "ERROR|CRITICAL"
 
 ```bash
 # Count failed jobs
-php artisan tinker
+docker compose exec web php artisan tinker
 >>> app(App\Services\JobMonitor::class)->getFailedJobsCount();
 
 # View failed job details
-php artisan queue:failed
+docker compose exec web php artisan queue:failed
 
 # Check logs for failure reason
-tail -f storage/logs/laravel.log | grep job_failed
+docker compose logs worker | grep job_failed
 ```
 
 ### Retry all failed jobs
 
 ```bash
-php artisan queue:retry all
+docker compose exec web php artisan queue:retry all
 ```
 
 ### Retry a specific job
 
 ```bash
-# Get the UUID from `php artisan queue:failed`
-php artisan queue:retry <uuid>
+# Get the UUID from queue:failed
+docker compose exec web php artisan queue:retry <uuid>
 ```
 
 ### Flush failed jobs (after investigation)
@@ -88,25 +95,33 @@ php artisan queue:retry <uuid>
 Only flush once you understand why jobs failed and are confident retrying won't help.
 
 ```bash
-php artisan queue:flush
+docker compose exec web php artisan queue:flush
 ```
 
 ### Common failure causes
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| `StoreFeedbackEmbedding` failing | OpenAI API key invalid or rate limited | Check `OPENAI_API_KEY`, verify API quota |
-| `SendIdempotentNotification` failing | Mail config issue | Check mail settings in `.env` |
-| Any job after Redis restart | Queue connection lost | Restart queue worker (see below) |
+| `StoreFeedbackEmbedding` failing | OpenAI API key invalid or rate limited | Check `OPENAI_API_KEY` in SSM Parameter Store, verify API quota |
+| `SendIdempotentNotification` failing | Mail config issue | Check mail settings in SSM Parameter Store |
+| Jobs not processing at all | SQS permissions issue | Verify EC2 instance role has `sqs:ReceiveMessage`, `sqs:DeleteMessage` |
 | Jobs failing after 3 retries | Permanent error (bad data, API down) | Check the specific exception in `queue:failed` |
 
 ### Restart queue worker
 
+Local:
 ```bash
 # Gracefully restart (finishes current job first)
-php artisan queue:restart
+docker compose exec web php artisan queue:restart
+# Docker will auto-restart the worker container (restart: unless-stopped)
+```
 
-# If using Supervisor, it will automatically restart the worker after this
+Production (AWS):
+```bash
+aws ssm send-command \
+  --instance-ids <instance-id> \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["docker restart feedbackhub-worker"]'
 ```
 
 ---
@@ -121,47 +136,55 @@ php artisan queue:restart
 ### Diagnose
 
 ```bash
-# Check queue depth
+# Check queue depth locally
 php artisan tinker
 >>> app(App\Services\MetricsService::class)->getSystemHealth()['queue_depth'];
 
-# Check if a worker is running
+# Check SQS queue depth in production
+aws sqs get-queue-attributes \
+  --queue-url <sqs_queue_url> \
+  --attribute-names ApproximateNumberOfMessages
+
+# Check if a worker is running (local)
 ps aux | grep "queue:work"
 ```
 
 ### Fix — worker not running
 
+Local:
 ```bash
-# Local: start a worker manually
-php artisan queue:work redis --verbose
+docker compose up -d worker
+docker compose logs -f worker
+```
 
-# Local: or if using Supervisor
-supervisorctl status
-supervisorctl start feedbackhub-worker:*
-
-# Production (AWS): force a new ECS deployment for the worker service
-aws ecs update-service \
-  --cluster feedbackhub-prod \
-  --service feedbackhub-worker \
-  --force-new-deployment
+Production (AWS):
+```bash
+# Restart the worker container on EC2
+aws ssm send-command \
+  --instance-ids <instance-id> \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["docker start feedbackhub-worker"]'
 ```
 
 ### Fix — worker running but slow
 
+Local:
 ```bash
-# Local: run additional workers to drain the backlog (separate terminals)
-php artisan queue:work redis --verbose
-php artisan queue:work redis --verbose
-
-# Production (AWS): increase desired task count on the worker service
-aws ecs update-service \
-  --cluster feedbackhub-prod \
-  --service feedbackhub-worker \
-  --desired-count 3
-# Scale back down once the queue drains (auto-scaling will also handle this)
+# Scale up to 2 worker containers to drain the backlog
+docker compose up -d --scale worker=2
+# Scale back down once queue is clear
+docker compose up -d --scale worker=1
 ```
 
-Kill the extra workers once the queue drains (Ctrl+C).
+Production (AWS):
+```bash
+# Start an additional worker container temporarily
+aws ssm send-command \
+  --instance-ids <instance-id> \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["docker run -d --name feedbackhub-worker-2 <image> php artisan queue:work sqs"]'
+# Stop it once the queue drains
+```
 
 ---
 
@@ -203,7 +226,7 @@ php artisan cache:clear
 Check that model events are firing. Metrics cache is cleared in `Feedback::booted()` on `created`, `updated`, and `deleted` hooks via `MetricsService::clearMetricsCache()`. If invalidation is broken:
 
 1. Confirm the model is firing events (not using `withoutEvents()` in the code path)
-2. Check Redis connectivity
+2. Check Redis connectivity (see Section 6)
 
 ---
 
@@ -233,15 +256,20 @@ php artisan tinker
 ### Investigate high usage
 
 ```bash
-# Find which tenant is making the most AI calls
+# Local
 grep "ai_usage_tracked" storage/logs/laravel.log | tail -200
+
+# Production (CloudWatch)
+aws logs filter-log-events \
+  --log-group-name /ec2/feedbackhub-web \
+  --filter-pattern '{ $.event = "ai_usage_tracked" }'
 ```
 
-Look for repeated requests from the same `tenant_id` in a short window — this may indicate a bug causing excessive calls (e.g., a loop, a misconfigured scheduled job).
+Look for repeated requests from the same `tenant_id` in a short window — this may indicate a bug causing excessive calls.
 
 ### Emergency — disable AI for a tenant
 
-Raise the `OPENAI_DAILY_LIMIT` threshold for specific tenants or temporarily disable the AI pipeline by returning early from `AiService::checkUsageLimits()`. This requires a code change and deployment — escalate if needed.
+Raise the `OPENAI_DAILY_LIMIT` threshold in SSM Parameter Store or temporarily disable the AI pipeline by returning early from `AiService::checkUsageLimits()`. This requires a code change and deployment — escalate if needed.
 
 ---
 
@@ -249,8 +277,8 @@ Raise the `OPENAI_DAILY_LIMIT` threshold for specific tenants or temporarily dis
 
 ### Symptoms
 - Cache returning null for all keys
-- Jobs not being dispatched or processed
 - `cache: "unhealthy"` in health check
+- Idempotency keys lost
 
 ### Diagnose
 
@@ -262,12 +290,17 @@ redis-cli ping
 
 ### Restart Redis
 
+Local:
 ```bash
-# If running as a service
-sudo systemctl restart redis
+docker compose restart redis
+```
 
-# If running via Docker
-docker restart <redis-container-name>
+Production (AWS — Redis runs in Docker on EC2):
+```bash
+aws ssm send-command \
+  --instance-ids <instance-id> \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["docker restart feedbackhub-redis"]'
 ```
 
 ### Verify recovery
@@ -293,7 +326,6 @@ php artisan tinker
 | AI usage tracking | Usage data lost for the downtime window |
 
 After Redis recovers, restart the queue worker to reconnect:
-
 ```bash
 php artisan queue:restart
 ```
@@ -307,7 +339,7 @@ php artisan queue:restart
 | Idempotency keys | Lost for the downtime window |
 | AI usage tracking | Usage data lost for the downtime window |
 
-In production, jobs continue to process normally even when ElastiCache is unavailable. Only caching is affected.
+In production, jobs continue to process normally even when Redis is unavailable. Only caching is affected.
 
 ---
 
@@ -328,21 +360,34 @@ php artisan tinker
 
 ### Check MySQL is running
 
+Local:
 ```bash
-# Check process
-ps aux | grep mysql
+docker compose ps mysql
+docker compose logs mysql
+```
 
-# Or via systemctl
-sudo systemctl status mysql
+Production (AWS RDS):
+```bash
+# Check RDS instance status
+aws rds describe-db-instances \
+  --db-instance-identifier feedbackhub-prod \
+  --query 'DBInstances[0].DBInstanceStatus'
+# Should return "available"
 ```
 
 ### Check slow query log
 
 ```bash
+# Local
 grep "slow_query" storage/logs/laravel.log | tail -50
+
+# Production (CloudWatch)
+aws logs filter-log-events \
+  --log-group-name /ec2/feedbackhub-web \
+  --filter-pattern '{ $.event = "slow_query" }'
 ```
 
-Slow queries (>100ms) are logged automatically by the `LogQueries` middleware. If you see many slow queries on the same table, an index may be missing or a query pattern has changed.
+Slow queries (>100ms) are logged automatically by the `LogQueries` middleware.
 
 ### Connection pool exhausted
 
@@ -351,13 +396,10 @@ If you see `Too many connections` errors:
 ```bash
 # Check current connections
 mysql -u root -p -e "SHOW STATUS LIKE 'Threads_connected';"
-
-# Check max connections setting
 mysql -u root -p -e "SHOW VARIABLES LIKE 'max_connections';"
 ```
 
 Restart queue workers to release stale connections:
-
 ```bash
 php artisan queue:restart
 ```
@@ -412,9 +454,7 @@ If feedback exists in MySQL but has no embedding in Pinecone (e.g., after a job 
 
 ```php
 php artisan tinker
-// Find feedback without embeddings and re-dispatch embedding jobs
->>> $feedback = App\Models\Feedback::whereNull('embedded_at')->get(); // if column exists
-// Or manually dispatch for specific IDs:
+// Manually dispatch embedding jobs for specific IDs:
 >>> App\Jobs\StoreFeedbackEmbedding::dispatch(App\Models\Feedback::find(42));
 ```
 
@@ -432,4 +472,4 @@ php artisan tinker
 grep "api_error" storage/logs/laravel.log | grep embedding | tail -20
 ```
 
-Common causes: invalid API key, rate limit exceeded, network timeout. Check the OpenAI status page and verify `OPENAI_API_KEY` in `.env`.
+Common causes: invalid API key, rate limit exceeded, network timeout. Check the OpenAI status page and verify `OPENAI_API_KEY` in SSM Parameter Store.

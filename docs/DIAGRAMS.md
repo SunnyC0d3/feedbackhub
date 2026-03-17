@@ -26,7 +26,8 @@ graph TB
 
     subgraph Storage["Storage Layer"]
         MYSQL[(MySQL 8.0<br/>Primary Database)]
-        REDIS[(Redis<br/>Cache + Queue)]
+        REDIS[(Redis<br/>Cache only)]
+        SQS[(SQS<br/>Job Queue)]
     end
 
     subgraph External["External APIs"]
@@ -41,7 +42,7 @@ graph TB
     SVC --> EVENTS
     EVENTS --> LISTENERS
     LISTENERS --> JOBS
-    JOBS --> REDIS
+    JOBS --> SQS
     SVC --> REDIS
     JOBS --> OPENAI
     JOBS --> PINECONE
@@ -64,7 +65,7 @@ sequenceDiagram
     participant N as NotifyOnFeedback<br/>Created
     participant E as EmbedFeedbackOn<br/>Created
     participant CM as ClearMetricsCache<br/>OnFeedback
-    participant Q as Redis Queue
+    participant Q as SQS Queue
     participant J1 as SendIdempotent<br/>Notification Job
     participant J2 as StoreFeedback<br/>Embedding Job
     participant OAI as OpenAI API
@@ -189,10 +190,10 @@ graph LR
         IDX["feedback-embeddings index<br/>1536 dims, cosine similarity<br/>100K vectors free tier"]
     end
 
-    subgraph Redis["Redis"]
-        CACHE["Cache DB 1<br/>Tenant-scoped keys<br/>TTL: 5m / 30m / 1h / 24h"]
-        QUEUE["Queue: default<br/>3 retries, exponential backoff<br/>60s → 300s → 900s"]
-        IDEMPOTENCY["Idempotency Keys<br/>24hr TTL<br/>prevents duplicate jobs"]
+    subgraph Storage["Storage"]
+        CACHE["Redis Cache<br/>Tenant-scoped keys<br/>TTL: 5m / 30m / 1h / 24h"]
+        SQS_Q["SQS Queue<br/>3 retries, exponential backoff<br/>60s → 300s → 900s"]
+        IDEMPOTENCY["Redis Idempotency Keys<br/>24hr TTL<br/>prevents duplicate jobs"]
     end
 
     ES -->|"feedback text"| EMB
@@ -209,8 +210,8 @@ graph LR
 
     AS --> CACHE
     JM --> CACHE
-    Q --> QUEUE
-    JM --> QUEUE
+    Q --> SQS_Q
+    JM --> SQS_Q
     Q --> IDEMPOTENCY
 ```
 
@@ -258,4 +259,54 @@ sequenceDiagram
     AS-->>FAS: {summary, tokens_used, cost_usd}
 
     FAS-->>User: {matches, summary, cost}
+```
+
+---
+
+## 6. AWS Deployment Architecture (Month 8)
+
+Production deployment using AWS free tier services.
+
+```mermaid
+graph TB
+    subgraph Internet["Internet"]
+        USER[Browser]
+        GH[GitHub Actions]
+    end
+
+    subgraph AWS_Public["AWS — Public Subnet"]
+        EC2["EC2 t2.micro<br/>nginx + PHP-FPM container<br/>queue worker container<br/>Redis container"]
+    end
+
+    subgraph AWS_Private["AWS — Private Subnet"]
+        RDS["RDS MySQL 8.0<br/>db.t3.micro single-AZ"]
+    end
+
+    subgraph AWS_Serverless["AWS — Serverless / Global"]
+        CF[CloudFront CDN]
+        S3[S3 Bucket<br/>React frontend]
+        EB[EventBridge<br/>every 1 min]
+        LAM[Lambda<br/>scheduler trigger]
+        SQS_D[SQS Queue<br/>+ Dead Letter Queue]
+        ECR[ECR<br/>Docker registry]
+        SSM[SSM Parameter Store<br/>secrets]
+        CW[CloudWatch<br/>logs + alarms]
+    end
+
+    USER -->|HTTPS API calls| EC2
+    USER -->|React app| CF
+    CF --> S3
+
+    GH -->|OIDC → push image| ECR
+    GH -->|SSM Run Command → deploy| EC2
+    GH -->|s3 sync| S3
+    GH -->|CF invalidation| CF
+
+    EC2 -->|reads secrets at startup| SSM
+    EC2 -->|polls jobs| SQS_D
+    EC2 -->|queries| RDS
+    EC2 -->|ships logs| CW
+
+    EB -->|every minute| LAM
+    LAM -->|SSM Run Command| EC2
 ```
